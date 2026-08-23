@@ -4,12 +4,14 @@ import { basename, join, relative } from 'path';
 import { fail } from './cli.mjs';
 import { localDateString } from './debrief.mjs';
 import {
+    configuredMirrors,
     configuredSystemName,
+    configuredVaults,
     readSystemConfig,
     relocateLegacySystemConfig,
     SYSTEM_CONFIG_RELATIVE_PATH,
-    writeSystemConfig,
-    updateSystemConfig
+    updateSystemConfig,
+    writeSystemConfig
 } from './system-config.mjs';
 import { ui } from './terminal.mjs';
 
@@ -96,6 +98,7 @@ export function initCommand(args, options, ctx) {
 
     let createdConfig = false;
     let labeled = false;
+    const added = [];
     if (name && !config.exists) {
         writeSystemConfig(repoRoot, {
             systemName: name,
@@ -105,12 +108,30 @@ export function initCommand(args, options, ctx) {
         });
         createdConfig = true;
         labeled = true;
+        if (vault) added.push(`vault ${vault}`);
+        if (mirror) added.push(`mirror ${mirror}`);
     } else {
         relocateLegacySystemConfig(repoRoot);
+        const updates = {};
         if (name && !existingName) {
-            updateSystemConfig(repoRoot, { systemName: name });
+            updates.systemName = name;
             labeled = true;
         }
+        if (vault) {
+            const current = configuredVaults(repoRoot);
+            if (!current.includes(vault)) {
+                updates.vaults = [...current, vault];
+                added.push(`vault ${vault}`);
+            }
+        }
+        if (mirror) {
+            const current = configuredMirrors(repoRoot);
+            if (!current.includes(mirror)) {
+                updates.mirrors = [...current, mirror];
+                added.push(`mirror ${mirror}`);
+            }
+        }
+        if (Object.keys(updates).length) updateSystemConfig(repoRoot, updates);
     }
     for (const domain of domains) mintDomain(repoRoot, domain);
 
@@ -126,14 +147,17 @@ export function initCommand(args, options, ctx) {
     if (options.quiet) return;
     const parts = [];
     if (labeled) parts.push(`Labeled ${systemName} in ${relative(repoRoot, join(repoRoot, SYSTEM_CONFIG_RELATIVE_PATH))}.`);
+    if (added.length) parts.push(`Configured ${added.join(' and ')}.`);
     if (domains.length) parts.push(`Created ${domains.length} domain charter(s).`);
     console.log(ui.success(parts.join(' ') || `Labeled ${systemName}.`));
 
-    if (createdConfig && (!vault || !mirror)) {
+    const vaults = configuredVaults(repoRoot);
+    const mirrors = configuredMirrors(repoRoot);
+    if (!vaults.length || !mirrors.length) {
         console.log('');
         console.log(ui.warning('Next Steps:'));
         console.log(ui.muted('  Vaults and mirrors are optional. A vault is the parent of compiled domain folders:'));
-        if (!vault) console.log(ui.muted('  $ sos config add vault /path/to/parent'));
-        if (!mirror) console.log(ui.muted('  $ sos config add mirror /path/to/backup'));
+        if (!vaults.length) console.log(ui.muted('  $ sos config add vault /path/to/parent'));
+        if (!mirrors.length) console.log(ui.muted('  $ sos config add mirror /path/to/backup'));
     }
 }

@@ -244,7 +244,7 @@ Options: --json, --quiet, --verbose`,
 
     init: `sos init [--name "System Name"] [--vault <path>] [--mirror <path>] --domain <name>:<private|restricted|public>
 
-Mint placeholder SPACE.md charters. Domain names are lowercase. --name is optional: it writes a dashboard label to .sos/config.json and is never rewritten. --vault and --mirror seed the first config when --name creates it. Without --name, sos status uses the repository folder name. Charter each new SPACE.md in conversational debrief before minting notes.
+Mint placeholder SPACE.md charters. Domain names are lowercase. --name is optional: it writes a dashboard label to .sos/config.json and is never rewritten. --vault and --mirror write those targets even when the unzipped folder already has .sos/config.json. Without --name, sos status uses the repository folder name. Charter each new SPACE.md in conversational debrief before minting notes.
 
 Example:
   sos init --domain personal:private

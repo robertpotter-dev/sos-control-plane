@@ -389,13 +389,24 @@ test('init --name persists onto an existing unzip config that has no systemName'
     mkdirSync(join(root, '.sos', 'vendor'), { recursive: true });
     cpSync(join(sourceLib, '..', 'vendor', 'yaml'), join(root, '.sos', 'vendor', 'yaml'), { recursive: true });
 
-    const result = spawnSync(process.execPath, [join(import.meta.dirname, '..', 'sos.mjs'), 'init', '--name', 'Robert Potter Me', '--domain', 'personal:private'], {
+    const result = spawnSync(process.execPath, [
+        join(import.meta.dirname, '..', 'sos.mjs'),
+        'init',
+        '--name', 'Robert Potter Me',
+        '--vault', '/tmp/Obsidian',
+        '--mirror', '/tmp/AI',
+        '--domain', 'personal:private'
+    ], {
         cwd: root,
         encoding: 'utf-8'
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(JSON.parse(readFileSync(join(root, '.sos', 'config.json'), 'utf-8')).systemName, 'Robert Potter Me');
+    const config = JSON.parse(readFileSync(join(root, '.sos', 'config.json'), 'utf-8'));
+    assert.equal(config.systemName, 'Robert Potter Me');
+    assert.deepEqual(config.vaults, ['/tmp/Obsidian']);
+    assert.deepEqual(config.mirrors, ['/tmp/AI']);
     assert.match(result.stdout, /Labeled Robert Potter Me/);
+    assert.match(result.stdout, /Configured vault \/tmp\/Obsidian and mirror \/tmp\/AI/);
 });
 
 test('init --name writes vaults and mirrors arrays from --vault and --mirror', () => {
