@@ -3,6 +3,7 @@ import test from 'node:test';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import os from 'node:os';
 
 const SOURCE_ROOT = join(import.meta.dirname, '..', '..');
@@ -257,7 +258,7 @@ test('graph reads a fresh version-3 index and does not write one on query', () =
     const root = graphFixture();
     const writer = spawnSync(process.execPath, ['--input-type=module', '-e', `
         process.env.SOS_ROOT = ${JSON.stringify(root)};
-        const { buildGraph, writeLocalIndex } = await import(${JSON.stringify(join(SOURCE_ROOT, '.sos', 'lib', 'graph.mjs'))});
+        const { buildGraph, writeLocalIndex } = await import(${JSON.stringify(pathToFileURL(join(SOURCE_ROOT, '.sos', 'lib', 'graph.mjs')).href)});
         writeLocalIndex(buildGraph());
     `], {
         cwd: root,

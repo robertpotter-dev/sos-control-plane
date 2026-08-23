@@ -5,7 +5,7 @@ import { join } from 'path';
 import { fail } from './cli.mjs';
 import { resolvedVaults } from './system-config.mjs';
 import { ui } from './terminal.mjs';
-import { firstCommand } from './tools.mjs';
+import { firstCommand, heicDecoderCandidates } from './tools.mjs';
 
 function toolCheck(name, required = false) {
     const isWin = process.platform === 'win32';
@@ -20,7 +20,7 @@ function whisperToolCheck() {
 }
 
 function heicDecoderCheck() {
-    const found = firstCommand(['magick', 'heif-convert', 'ffmpeg', 'convert']);
+    const found = firstCommand(heicDecoderCandidates());
     return { name: 'HEIC/DNG decoder', required: false, ok: Boolean(found), path: found };
 }
 

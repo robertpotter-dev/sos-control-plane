@@ -395,7 +395,7 @@ function withSilencedConsole(fn) {
 
 function processItem(item, dryRun, { silent = false, frontier = false } = {}) {
     const batchDirectory = item.kind === 'batch' ? allocateBatchArchiveDirectory(item.domain, item.label) : null;
-    const manifest = new Map(item.files.map(file => [file.path, { originalPath: relative(REPO_ROOT, file.path), archivePath: null, artifacts: [] }]));
+    const manifest = new Map(item.files.map(file => [file.path, { originalPath: posixRel(file.path), archivePath: null, artifacts: [] }]));
     const failures = [];
     const attempt = (file, operation) => {
         try {
@@ -496,7 +496,7 @@ function processItem(item, dryRun, { silent = false, frontier = false } = {}) {
                 dryRun,
                 frontier
             });
-            debrief = relative(REPO_ROOT, record.filePath);
+            debrief = posixRel(record.filePath);
             if (!silent) {
                 const label = dryRun ? 'DRY Debrief record' : 'Debrief record';
                 const color = dryRun ? ui.warning : ui.success;
@@ -612,7 +612,7 @@ async function main() {
             }
             units.push({
                 kind: item.kind,
-                path: relative(REPO_ROOT, item.inboxPath),
+                path: posixRel(item.inboxPath),
                 domain: item.domain.name,
                 files: item.files.length,
                 debrief: result.debrief,
@@ -626,7 +626,7 @@ async function main() {
             if (!options.json) console.error('  ' + ui.error('Error: ' + error.stack));
             units.push({
                 kind: item.kind,
-                path: relative(REPO_ROOT, item.inboxPath),
+                path: posixRel(item.inboxPath),
                 domain: item.domain.name,
                 files: item.files.length,
                 debrief: null,

@@ -27,7 +27,7 @@ test('folder batches produce one deterministic record with every source pointer'
         ]
     });
 
-    assert.match(record.filePath, /inbox\/debrief-2026-08-16\.md$/);
+    assert.ok(record.filePath.endsWith(join('inbox', 'debrief-2026-08-16.md')));
     assert.match(record.content, /type: "debrief-record"/);
   assert.match(record.content, /\*\*Scope:\*\* Folder batch/);
   assert.match(record.content, /morning\.md/);

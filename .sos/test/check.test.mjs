@@ -286,7 +286,7 @@ test('sos status --json reports Tier 2 assets and Tier 3 archives separately fro
     assert.equal(payload.graph.canonicalIds, 1);
     assert.equal(payload.graph.assets, 1);
     assert.equal(payload.graph.archives, 2);
-    assert.equal(payload.version, '1.5.2');
+    assert.equal(payload.version, '1.5.3');
 });
 
 test('status dashboard centers each status line under the mark', () => {

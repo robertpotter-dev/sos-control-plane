@@ -1,6 +1,6 @@
 {
   "name": "sovereign-os",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "Local-first intellectual operating system and knowledge graph",
   "type": "module",
   "bin": {

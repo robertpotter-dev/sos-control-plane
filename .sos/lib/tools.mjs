@@ -20,3 +20,11 @@ export function runTool(command, args, options = {}) {
 export function findWhisperCli() {
     return firstCommand(['whisper-cli', 'whisper-cpp', 'whisper']);
 }
+
+// On Windows, `convert.exe` is the built-in FAT-to-NTFS filesystem converter, not ImageMagick.
+// Only trust the bare `convert` name as an ImageMagick alias off Windows.
+export function heicDecoderCandidates() {
+    return process.platform === 'win32'
+        ? ['magick', 'heif-convert', 'ffmpeg']
+        : ['magick', 'convert', 'heif-convert', 'ffmpeg'];
+}

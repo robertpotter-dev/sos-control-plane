@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, statSync } from 'fs';
-import { extname, join, relative, resolve } from 'path';
+import { extname, join, relative, resolve, sep } from 'path';
 
 import { isDebriefRecord } from './debrief.mjs';
 
@@ -11,6 +11,10 @@ const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.heic', '.webp', '.tiff', 
 const TEXT_EXTS = new Set(['.txt', '.rtf', '.md', '.markdown']);
 const DOCUMENT_EXTS = new Set(['.pdf']);
 const SPREADSHEET_EXTS = new Set(['.csv', '.xlsx']);
+
+function toPosix(path) {
+    return path.split(sep).join('/');
+}
 
 export function classifyInboxFile(path) {
     const extension = extname(path).toLowerCase();
@@ -39,7 +43,7 @@ export function collectInboxBatchFiles(root, current = root, { strict = false } 
         files.push({
             path,
             file: name,
-            relativePath: relative(root, path),
+            relativePath: toPosix(relative(root, path)),
             type: type ?? 'unsupported'
         });
     }
@@ -48,11 +52,11 @@ export function collectInboxBatchFiles(root, current = root, { strict = false } 
 
 export function displayInboxPath(filePath, { repoRoot, vaults = [] }) {
     const local = relative(repoRoot, filePath);
-    if (!local.startsWith('..') && !resolve(local).startsWith('..')) return local;
+    if (!local.startsWith('..') && !resolve(local).startsWith('..')) return toPosix(local);
 
     for (const vault of vaults) {
         const cloud = relative(vault, filePath);
-        if (!cloud.startsWith('..')) return join('external', cloud);
+        if (!cloud.startsWith('..')) return toPosix(join('external', cloud));
     }
     return filePath;
 }

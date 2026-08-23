@@ -2,7 +2,7 @@ import { existsSync, readFileSync, unlinkSync } from 'fs';
 import { extname, join } from 'path';
 import os from 'os';
 
-import { commandExists, runTool } from './tools.mjs';
+import { commandExists, heicDecoderCandidates, runTool } from './tools.mjs';
 
 export const DECODE_EXTS = new Set(['.heic', '.heif', '.avif', '.dng', '.tif', '.tiff']);
 
@@ -38,12 +38,15 @@ export function readImageSize(path) {
     return { width: 0, height: 0 };
 }
 
+function argsForDecoder(command, sourcePath, destPath) {
+    if (command === 'ffmpeg') return ['-y', '-i', sourcePath, '-map_metadata', '0', destPath];
+    return [sourcePath, destPath];
+}
+
 function convertWithAvailableTool(sourcePath, destPath) {
-    const attempts = [];
-    if (commandExists('magick')) attempts.push(['magick', [sourcePath, destPath]]);
-    if (commandExists('convert')) attempts.push(['convert', [sourcePath, destPath]]);
-    if (commandExists('heif-convert')) attempts.push(['heif-convert', [sourcePath, destPath]]);
-    if (commandExists('ffmpeg')) attempts.push(['ffmpeg', ['-y', '-i', sourcePath, '-map_metadata', '0', destPath]]);
+    const attempts = heicDecoderCandidates()
+        .filter(commandExists)
+        .map(command => [command, argsForDecoder(command, sourcePath, destPath)]);
     for (const [command, args] of attempts) {
         try {
             runTool(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });

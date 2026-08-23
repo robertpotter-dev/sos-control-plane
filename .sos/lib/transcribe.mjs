@@ -11,7 +11,7 @@ import {
     writeFileSync
 } from 'fs';
 import os from 'os';
-import { basename, dirname, extname, join, relative, resolve } from 'path';
+import { basename, dirname, extname, join, relative, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 
 import { discoverDomains, REPO_ROOT } from './domains.mjs';
@@ -116,7 +116,7 @@ export function transcribe(inputFile, targetDir = null, requestedDomain = null, 
     const domains = discoverDomains();
     const domain = requestedDomain
         ? domains.find(candidate => candidate.name === requestedDomain)
-        : domains.find(candidate => absInput === candidate.path || absInput.startsWith(`${candidate.path}/`));
+        : domains.find(candidate => absInput === candidate.path || absInput.startsWith(`${candidate.path}${sep}`));
     if (!domain) {
         throw new Error(`Cannot resolve a domain for ${absInput}. Pass --domain <name>.`);
     }
@@ -151,7 +151,8 @@ export function transcribe(inputFile, targetDir = null, requestedDomain = null, 
         console.log(`  Skipping redundant Whisper run to conserve compute.`);
 
         let retainedArchivePath = archivePath;
-        if (absInput.includes('/inbox/') && !absInput.includes('/inbox/archive/')) {
+        const absInputPosix = absInput.split(sep).join('/');
+        if (absInputPosix.includes('/inbox/') && !absInputPosix.includes('/inbox/archive/')) {
             retainedArchivePath = allocateDuplicateArchivePath(archiveDir, baseName, ext);
             if (dryRun) {
                 console.log(`  DRY Preserve duplicate source -> ${retainedArchivePath}`);
@@ -354,7 +355,8 @@ ${cleanBody}
     if (existsSync(tempWav)) unlinkSync(tempWav);
 
     // Archive-Move Invariant: Move raw source media to inbox/archive if not already there
-    if (absInput.includes('/inbox/') && !absInput.includes('/inbox/archive/')) {
+    const absInputPosixFinal = absInput.split(sep).join('/');
+    if (absInputPosixFinal.includes('/inbox/') && !absInputPosixFinal.includes('/inbox/archive/')) {
         renameSync(absInput, archivePath);
         console.log(`📦 Archived source media:       ${archivePath}`);
     }
