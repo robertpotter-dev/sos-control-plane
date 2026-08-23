@@ -1,0 +1,5 @@
+#!/bin/sh
+node .sos/lib/format.mjs
+node .sos/lib/lint.mjs
+node .sos/lib/audit.mjs
+git add -- "$file"

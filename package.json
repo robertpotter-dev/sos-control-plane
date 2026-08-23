@@ -1,0 +1,29 @@
+{
+  "name": "sovereign-os",
+  "version": "1.5.0",
+  "description": "Local-first intellectual operating system and knowledge graph",
+  "type": "module",
+  "bin": {
+    "sos": ".sos/sos.mjs"
+  },
+  "scripts": {
+    "sos": "node .sos/sos.mjs",
+    "help": "node .sos/sos.mjs help",
+    "sync": "node .sos/lib/sync.mjs",
+    "graph": "node .sos/lib/graph.mjs",
+    "ingest": "node .sos/lib/ingest.mjs",
+    "audit": "node .sos/lib/audit.mjs",
+    "lint": "node .sos/lib/lint.mjs",
+    "format": "node .sos/lib/format.mjs",
+    "check": "node .sos/lib/pipeline.mjs",
+    "transcribe": "node .sos/lib/transcribe.mjs",
+    "fetch": "node .sos/lib/fetch.mjs",
+    "vision": "swift .sos/lib/vision.swift",
+    "test": "node --test .sos/test/*.test.mjs"
+  },
+  "keywords": [
+    "pkm",
+    "sovereign-os",
+    "local-first"
+  ]
+}
