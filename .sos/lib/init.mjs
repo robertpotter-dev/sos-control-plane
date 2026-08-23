@@ -8,7 +8,8 @@ import {
     readSystemConfig,
     relocateLegacySystemConfig,
     SYSTEM_CONFIG_RELATIVE_PATH,
-    writeSystemConfig
+    writeSystemConfig,
+    updateSystemConfig
 } from './system-config.mjs';
 import { ui } from './terminal.mjs';
 
@@ -94,6 +95,7 @@ export function initCommand(args, options, ctx) {
     }
 
     let createdConfig = false;
+    let labeled = false;
     if (name && !config.exists) {
         writeSystemConfig(repoRoot, {
             systemName: name,
@@ -102,8 +104,13 @@ export function initCommand(args, options, ctx) {
             mirrors: mirror ? [mirror] : []
         });
         createdConfig = true;
+        labeled = true;
     } else {
         relocateLegacySystemConfig(repoRoot);
+        if (name && !existingName) {
+            updateSystemConfig(repoRoot, { systemName: name });
+            labeled = true;
+        }
     }
     for (const domain of domains) mintDomain(repoRoot, domain);
 
@@ -118,7 +125,7 @@ export function initCommand(args, options, ctx) {
     if (options.json) return console.log(JSON.stringify(result, null, 2));
     if (options.quiet) return;
     const parts = [];
-    if (createdConfig) parts.push(`Labeled ${systemName} in ${relative(repoRoot, join(repoRoot, SYSTEM_CONFIG_RELATIVE_PATH))}.`);
+    if (labeled) parts.push(`Labeled ${systemName} in ${relative(repoRoot, join(repoRoot, SYSTEM_CONFIG_RELATIVE_PATH))}.`);
     if (domains.length) parts.push(`Created ${domains.length} domain charter(s).`);
     console.log(ui.success(parts.join(' ') || `Labeled ${systemName}.`));
 

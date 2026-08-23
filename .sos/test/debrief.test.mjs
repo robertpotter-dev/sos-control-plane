@@ -377,6 +377,27 @@ test('init creates portable identity configuration only when explicitly requeste
     assert.match(rename.stderr, /will not rename/);
 });
 
+test('init --name persists onto an existing unzip config that has no systemName', () => {
+    const root = mkdtempSync(join(os.tmpdir(), 'sos-init-zip-config-'));
+    const sourceLib = join(import.meta.dirname, '..', 'lib');
+    mkdirSync(join(root, '.sos', 'lib'), { recursive: true });
+    writeFileSync(join(root, 'package.json'), '{"name":"fixture","type":"module"}\n', 'utf-8');
+    writeFileSync(join(root, '.sos', 'config.json'), '{"version":1,"vaults":[],"mirrors":[]}\n', 'utf-8');
+    for (const name of ['domains.mjs', 'frontmatter.mjs', 'relations.mjs', 'root.mjs', 'yaml.mjs']) {
+        copyFileSync(join(sourceLib, name), join(root, '.sos', 'lib', name));
+    }
+    mkdirSync(join(root, '.sos', 'vendor'), { recursive: true });
+    cpSync(join(sourceLib, '..', 'vendor', 'yaml'), join(root, '.sos', 'vendor', 'yaml'), { recursive: true });
+
+    const result = spawnSync(process.execPath, [join(import.meta.dirname, '..', 'sos.mjs'), 'init', '--name', 'Robert Potter Me', '--domain', 'personal:private'], {
+        cwd: root,
+        encoding: 'utf-8'
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(readFileSync(join(root, '.sos', 'config.json'), 'utf-8')).systemName, 'Robert Potter Me');
+    assert.match(result.stdout, /Labeled Robert Potter Me/);
+});
+
 test('init --name writes vaults and mirrors arrays from --vault and --mirror', () => {
     const root = mkdtempSync(join(os.tmpdir(), 'sos-init-sync-'));
     const sourceLib = join(import.meta.dirname, '..', 'lib');

@@ -209,16 +209,19 @@ Options
 
 Options: --json, --quiet, --verbose`,
 
-    sync: `sos sync [--quick|--vaults|--mirrors|--all|--rebuild] [--dry-run]
+    sync: `sos sync [--quick|--vaults|--mirrors|--all|--rebuild] [--dry-run] [--force]
 
 Validate and synchronize the compiled system to its configured destinations. Use --dry-run to inspect planned changes without writing. After a successful run (not a dry run), refresh the local graph index.
+
+Before compiling, sync reads each destination vault charter. A new vault is written. A vault stamped by this system is overwritten. A vault that already exists under a different system — or with no stamp — stops the command. Nothing is overwritten. Fix the destination yourself or with your agent, or pass --force to take it (not recommended).
 
 --rebuild empties compiled vault files, then compiles again. It keeps the vault folder, .obsidian, and live inbox/ captures. inbox/archive is restored from git.
 
 Options
+  --force             Overwrite a destination vault that belongs to another system. Not recommended.
   --json              Compact machine payload: targets, node count, and planned write counts. No per-file log.
 
-Options: --quick, --vaults, --mirrors, --all, --rebuild, --dry-run, --json, --quiet, --verbose`,
+Options: --quick, --vaults, --mirrors, --all, --rebuild, --force, --dry-run, --json, --quiet, --verbose`,
 
     upgrade: `sos upgrade [--path <dir>] [--dry-run]
 

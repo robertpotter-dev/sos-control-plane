@@ -9,7 +9,6 @@ import {
     statSync,
     writeFileSync
 } from 'fs';
-import os from 'os';
 import { basename, dirname, join, relative } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -28,21 +27,23 @@ import {
     saveVaultManifest,
     textFingerprint
 } from './vault-manifest.mjs';
+import { instanceLabel, resolvedMirrors, resolvedVaults } from './system-config.mjs';
 import { resetCompiledVault } from './vault-rebuild.mjs';
+import { compiledFromValue, formatVaultOwnershipFailure, stampCompiledFrom, vaultOwnershipConflict } from './vault-ownership.mjs';
 import { mirrorTree } from './mirror-tree.mjs';
 
 const LIB_DIR = dirname(fileURLToPath(import.meta.url));
-const HOME = os.homedir();
 const SYSTEM_NAME = basename(SYSTEM_ROOT);
-import { resolvedVaults, resolvedMirrors } from './system-config.mjs';
 const VAULT_TARGETS = resolvedVaults(SYSTEM_ROOT);
 const MIRROR_TARGETS = resolvedMirrors(SYSTEM_ROOT).map(m => join(m, SYSTEM_NAME));
+const INSTANCE_LABEL = instanceLabel(SYSTEM_ROOT);
 const DOMAIN_VAULTS = new Map(discoverDomains().map(domain => [domain.name.toLowerCase(), domain.vaultName]));
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const json = args.includes('--json');
 const rebuild = args.includes('--rebuild');
-const knownOptions = new Set(['--dry-run', '--json', '--quick', '-q', '--vaults', '-v', '--mirrors', '-m', '--all', '--rebuild']);
+const force = args.includes('--force');
+const knownOptions = new Set(['--dry-run', '--json', '--quick', '-q', '--vaults', '-v', '--mirrors', '-m', '--all', '--rebuild', '--force']);
 const unknownOptions = args.filter(arg => arg.startsWith('-') && !knownOptions.has(arg));
 if (unknownOptions.length > 0) {
     const message = `Unknown sync option: ${unknownOptions.join(', ')}`;
@@ -74,10 +75,10 @@ function ensureDirectory(path) {
     mkdirSync(path, { recursive: true });
 }
 
-function writeText(path, content) {
+function writeText(path, content, { always = false } = {}) {
     const key = vaultKey(path);
     const fingerprint = textFingerprint(sha256String(content));
-    if (existsSync(path) && fingerprintsMatch(vaultManifest.files[key], fingerprint)) {
+    if (!always && existsSync(path) && fingerprintsMatch(vaultManifest.files[key], fingerprint)) {
         syncStats.textSkips++;
         rememberVault(key, fingerprint);
         return;
@@ -299,7 +300,9 @@ function syncDomainVault(targetBasePath, domainName, vaultName, idMap) {
                 const rawContent = readFileSync(srcPath, 'utf-8');
                 let compiledContent = transformForObsidian(rawContent, vaultName, idMap);
                 compiledContent = compiledContent.replace(/\bSPACE\.md\b/g, `${vaultName}%20Charter.md`);
-                writeText(dstPath, compiledContent);
+                if (entry === 'SPACE.md') compiledContent = stampCompiledFrom(compiledContent, INSTANCE_LABEL);
+                const destOwner = existsSync(dstPath) ? compiledFromValue(readFileSync(dstPath, 'utf-8')) : INSTANCE_LABEL;
+                writeText(dstPath, compiledContent, { always: entry === 'SPACE.md' && destOwner !== INSTANCE_LABEL });
             } else {
                 copyFile(srcPath, dstPath);
             }
@@ -384,6 +387,46 @@ function syncDomainVault(targetBasePath, domainName, vaultName, idMap) {
 }
 
 // 4. Sync all vaults with smart compilation
+function collectVaultOwnershipConflicts() {
+    const conflicts = [];
+    for (const domain of discoverDomains()) {
+        for (const vaultTarget of VAULT_TARGETS) {
+            const destCharterPath = join(vaultTarget, domain.vaultName, `${domain.vaultName} Charter.md`);
+            const conflict = vaultOwnershipConflict({
+                destCharterPath,
+                instanceLabel: INSTANCE_LABEL,
+                vaultName: domain.vaultName
+            });
+            if (conflict) conflicts.push({ ...conflict, domain: domain.name, vaultTarget });
+        }
+    }
+    return conflicts;
+}
+
+function haltOnVaultOwnership(conflicts) {
+    const message = formatVaultOwnershipFailure(conflicts);
+    if (json) {
+        process.stdout.write(`${JSON.stringify({
+            ok: false,
+            dryRun,
+            error: message,
+            vaultOwnership: {
+                instance: INSTANCE_LABEL,
+                conflicts: conflicts.map(conflict => ({
+                    kind: conflict.kind,
+                    owner: conflict.owner,
+                    vault: conflict.vaultName,
+                    domain: conflict.domain,
+                    path: conflict.destCharterPath
+                }))
+            }
+        }, null, 2)}\n`);
+    } else {
+        console.error(ui.error(message));
+    }
+    process.exit(1);
+}
+
 function syncVaults(idMap) {
     const vaultsRequested = args.includes('--vaults') || args.includes('-v') || rebuild;
     if (VAULT_TARGETS.length === 0) {
@@ -526,6 +569,11 @@ if (!dryRun) {
 
 const idMap = buildNodeIndex();
 if (!json) console.log(`Indexed ${ui.heading(idMap.size)} canonical nodes in the knowledge graph.`);
+
+if (doVaults && !force) {
+    const conflicts = collectVaultOwnershipConflicts();
+    if (conflicts.length) haltOnVaultOwnership(conflicts);
+}
 
 const emit = console.log;
 const emitErr = console.error;

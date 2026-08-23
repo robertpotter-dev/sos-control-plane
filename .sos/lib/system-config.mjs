@@ -27,6 +27,12 @@ export function configuredSystemName(repoRoot) {
     return typeof data.systemName === 'string' && data.systemName.trim() ? data.systemName : basename(repoRoot);
 }
 
+export function instanceLabel(repoRoot) {
+    const { data } = readSystemConfig(repoRoot);
+    if (typeof data.systemName === 'string' && data.systemName.trim()) return data.systemName.trim();
+    return basename(repoRoot);
+}
+
 export function expandHomePath(value) {
     if (typeof value !== 'string') return null;
     const trimmed = value.trim();

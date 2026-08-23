@@ -172,3 +172,129 @@ test('sos sync compiles the same domain into every configured vault without fing
     assert.ok(keys.some(key => key.startsWith(`${first}::`)));
     assert.ok(keys.some(key => key.startsWith(`${second}::`)));
 });
+
+function journalSyncFixture(systemName) {
+    const fixture = mkdtempSync(join(os.tmpdir(), 'sos-sync-own-src-'));
+    const vaultParent = mkdtempSync(join(os.tmpdir(), 'sos-sync-own-vault-'));
+    mkdirSync(join(fixture, 'journal', 'inbox', 'archive'), { recursive: true });
+    mkdirSync(join(fixture, '.sos'), { recursive: true });
+    writeFileSync(join(fixture, '.sos', 'operator-preferences.json'), '{"preferences":[]}\n');
+    writeFileSync(join(fixture, '.sos', 'config.json'), `${JSON.stringify({
+        version: 1,
+        systemName,
+        vaults: [vaultParent],
+        mirrors: []
+    }, null, 2)}\n`);
+    writeFileSync(join(fixture, 'journal', 'SPACE.md'), [
+        '---',
+        'id: "jrnl:charter"',
+        'parent: "jrnl:charter"',
+        'related: []',
+        'title: "Journal Charter"',
+        'type: "charter"',
+        'domain: "journal"',
+        'exposure: "private"',
+        'status: "active"',
+        'created: 2026-08-18',
+        'updated: 2026-08-18',
+        'tags: ["test"]',
+        '---',
+        '',
+        '# Journal',
+        ''
+    ].join('\n'));
+    return { fixture, vaultParent };
+}
+
+test('sos sync stamps a new vault charter and refuses a foreign owner without --force', () => {
+    const { fixture, vaultParent } = journalSyncFixture('Robert Potter Work');
+    const env = { ...process.env, SOS_ROOT: fixture, NO_COLOR: '1' };
+    delete env.SOS_OBSIDIAN_ROOT;
+
+    const first = spawnSync(process.execPath, [join(repoRoot, '.sos', 'sos.mjs'), 'sync', '--quick', '--vaults', '--json'], {
+        cwd: repoRoot,
+        env,
+        encoding: 'utf-8'
+    });
+    assert.equal(first.status, 0, first.stderr || first.stdout);
+    const charter = join(vaultParent, 'Journal', 'Journal Charter.md');
+    assert.match(readFileSync(charter, 'utf-8'), /compiled_from: "Robert Potter Work"/);
+
+    writeFileSync(charter, [
+        '---',
+        'compiled_from: "Robert Potter Me"',
+        'id: "jrnl:charter"',
+        'parent: "jrnl:charter"',
+        'related: []',
+        'title: "Journal Charter"',
+        'type: "charter"',
+        'domain: "journal"',
+        'exposure: "private"',
+        'status: "active"',
+        'created: 2026-08-18',
+        'updated: 2026-08-18',
+        'tags: ["test"]',
+        '---',
+        '',
+        '# Keep me',
+        ''
+    ].join('\n'));
+    writeFileSync(join(vaultParent, 'Journal', 'marker.md'), 'untouched\n');
+
+    const blocked = spawnSync(process.execPath, [join(repoRoot, '.sos', 'sos.mjs'), 'sync', '--quick', '--vaults', '--json'], {
+        cwd: repoRoot,
+        env,
+        encoding: 'utf-8'
+    });
+    assert.equal(blocked.status, 1, blocked.stderr || blocked.stdout);
+    const payload = JSON.parse(blocked.stdout);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /already exists under a different system "Robert Potter Me"/);
+    assert.doesNotMatch(payload.error, /init --domain/);
+    assert.equal(readFileSync(join(vaultParent, 'Journal', 'marker.md'), 'utf-8'), 'untouched\n');
+    assert.match(readFileSync(charter, 'utf-8'), /Keep me/);
+
+    const forced = spawnSync(process.execPath, [join(repoRoot, '.sos', 'sos.mjs'), 'sync', '--quick', '--vaults', '--json', '--force'], {
+        cwd: repoRoot,
+        env,
+        encoding: 'utf-8'
+    });
+    assert.equal(forced.status, 0, forced.stderr || forced.stdout);
+    assert.match(readFileSync(charter, 'utf-8'), /compiled_from: "Robert Potter Work"/);
+});
+
+test('sos sync stops on an unstamped existing vault charter', () => {
+    const { fixture, vaultParent } = journalSyncFixture('Robert Potter Me');
+    mkdirSync(join(vaultParent, 'Journal'), { recursive: true });
+    writeFileSync(join(vaultParent, 'Journal', 'Journal Charter.md'), [
+        '---',
+        'id: "jrnl:charter"',
+        'parent: "jrnl:charter"',
+        'related: []',
+        'title: "Journal Charter"',
+        'type: "charter"',
+        'domain: "journal"',
+        'exposure: "private"',
+        'status: "active"',
+        'created: 2026-08-18',
+        'updated: 2026-08-18',
+        'tags: ["test"]',
+        '---',
+        '',
+        '# Legacy',
+        ''
+    ].join('\n'));
+    const env = { ...process.env, SOS_ROOT: fixture, NO_COLOR: '1' };
+    delete env.SOS_OBSIDIAN_ROOT;
+    const result = spawnSync(process.execPath, [join(repoRoot, '.sos', 'sos.mjs'), 'sync', '--quick', '--vaults', '--json'], {
+        cwd: repoRoot,
+        env,
+        encoding: 'utf-8'
+    });
+    assert.equal(result.status, 1, result.stderr || result.stdout);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /already exists and has no system stamp/);
+    assert.match(payload.error, /Overwrite is not recommended: sos sync --force/);
+    assert.match(readFileSync(join(vaultParent, 'Journal', 'Journal Charter.md'), 'utf-8'), /Legacy/);
+});

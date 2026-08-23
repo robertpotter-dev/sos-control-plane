@@ -78,7 +78,9 @@ test('audit and sync use the shared semantic terminal palette', () => {
     assert.match(sync, /inbox\/archive/);
     assert.match(sync, /vault-manifest/);
     assert.match(sync, /--rebuild/);
+    assert.match(sync, /--force/);
     assert.match(sync, /resetCompiledVault/);
+    assert.match(sync, /vaultOwnershipConflict/);
     assert.match(sync, /entry === 'inbox' \|\| entry === '\.obsidian'/);
     assert.match(sync, /CURRENT_VAULT_TARGET/);
     assert.doesNotMatch(sync, /OBSIDIAN_TARGET/);
@@ -284,7 +286,7 @@ test('sos status --json reports Tier 2 assets and Tier 3 archives separately fro
     assert.equal(payload.graph.canonicalIds, 1);
     assert.equal(payload.graph.assets, 1);
     assert.equal(payload.graph.archives, 2);
-    assert.equal(payload.version, '1.5.0');
+    assert.equal(payload.version, '1.5.1');
 });
 
 test('status dashboard centers each status line under the mark', () => {

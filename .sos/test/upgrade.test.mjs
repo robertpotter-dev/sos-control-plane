@@ -41,7 +41,7 @@ test('upgrade --dry-run overlays the control plane and preserves instance custod
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
     assert.equal(payload.dryRun, true);
-    assert.equal(payload.toVersion, '1.5.0');
+    assert.equal(payload.toVersion, '1.5.1');
     assert.equal(payload.fromVersion, '1.0.0');
     assert.ok(payload.copied.includes('AGENTS.md'));
     assert.ok(payload.copied.includes('DEBRIEF.md'));
@@ -76,7 +76,7 @@ test('upgrade copies the control plane and keeps config, preferences, and notes'
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
     assert.equal(payload.dryRun, false);
-    assert.equal(JSON.parse(readFileSync(join(dest, 'package.json'), 'utf-8')).version, '1.5.0');
+    assert.equal(JSON.parse(readFileSync(join(dest, 'package.json'), 'utf-8')).version, '1.5.1');
     assert.match(readFileSync(join(dest, 'AGENTS.md'), 'utf-8'), /sos upgrade/);
     assert.match(readFileSync(join(dest, 'DEBRIEF.md'), 'utf-8'), /Conversational Debrief Protocol/);
     assert.equal(JSON.parse(readFileSync(join(dest, '.sos', 'config.json'), 'utf-8')).systemName, 'Workbench Fixture');
