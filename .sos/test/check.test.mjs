@@ -44,19 +44,39 @@ test('check is limited to format, lint, and audit', () => {
 test('format excludes deterministic evidence, inbox custody, and generated control-plane state', () => {
     const source = readFileSync(join(root, '.sos', 'lib', 'format.mjs'), 'utf-8');
 
-    assert.match(source, /file === 'inbox' \|\| file === 'assets' \|\| file === 'cache' \|\| file === 'runtime' \|\| file === 'vendor'/);
+    assert.match(source, /SKIP_DIRS = new Set\(\['inbox', 'assets', 'cache', 'runtime', 'vendor'\]\)/);
+    assert.match(source, /SKIP_DIRS\.has\(file\)/);
+    assert.match(source, /ui\.option\('RUN'\)/);
+    assert.match(source, /ui\.success\('PASS'\)/);
+    assert.doesNotMatch(source, /✨|🎉/);
+});
+
+test('lint uses the shared terminal palette and skips vendor plus generated state', () => {
+    const source = readFileSync(join(root, '.sos', 'lib', 'lint.mjs'), 'utf-8');
+
+    assert.match(source, /SKIP_DIRS = new Set\(\['inbox', 'assets', 'cache', 'runtime', 'vendor'\]\)/);
+    assert.match(source, /SKIP_DIRS\.has\(file\)/);
+    assert.match(source, /ui\.option\('RUN'\)/);
+    assert.match(source, /ui\.success\('PASS'\)/);
+    assert.doesNotMatch(source, /🔍|✨|🎉|LINT SUMMARY|Knowledge Graph Linter/);
 });
 
 test('git hooks format before the snapshot and sync without formatting after it', () => {
     const pre = readFileSync(join(root, '.sos', 'hooks', 'pre-commit'), 'utf-8');
     const post = readFileSync(join(root, '.sos', 'hooks', 'post-commit'), 'utf-8');
 
-    assert.match(pre, /format\.mjs/);
-    assert.match(pre, /lint\.mjs/);
-    assert.match(pre, /audit\.mjs/);
-    assert.match(pre, /git add -- "\$file"/);
-    assert.match(post, /sync\.mjs" --quick/);
-    assert.doesNotMatch(post, /sync\.mjs" > /);
+    assert.match(pre, /^set -e$/m);
+    assert.match(pre, /git rev-parse --show-toplevel/);
+    assert.match(pre, /export SOS_ROOT="\$PWD"/);
+    assert.match(pre, /sos\.mjs check/);
+    assert.match(pre, /git diff --cached --name-only/);
+    assert.match(pre, /git add --/);
+    assert.doesNotMatch(pre, /git add -u/);
+    assert.doesNotMatch(pre, /format\.mjs|lint\.mjs|audit\.mjs|\$file/);
+    assert.match(post, /^set -e$/m);
+    assert.match(post, /export SOS_ROOT="\$PWD"/);
+    assert.match(post, /sos\.mjs sync --quick --quiet/);
+    assert.doesNotMatch(post, /format\.mjs|sync\.mjs"/);
 });
 
 test('audit and sync use the shared semantic terminal palette', () => {
@@ -273,7 +293,7 @@ test('sos status --json reports Tier 2 assets and Tier 3 archives separately fro
         ''
     ].join('\n'), 'utf-8');
     writeFileSync(join(fixture, 'journal', 'inbox', 'archive', 'memo.wav'), 'audio');
-    writeFileSync(join(fixture, 'journal', 'inbox', 'archive', 'transcript-memo.json'), '{}');
+    writeFileSync(join(fixture, 'journal', 'assets', 'transcript-memo.segments.jsonl'), '{}\n');
 
     const result = spawnSync(process.execPath, [join(root, '.sos', 'sos.mjs'), 'status', '--json'], {
         cwd: root,
@@ -284,9 +304,9 @@ test('sos status --json reports Tier 2 assets and Tier 3 archives separately fro
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.graph.tierOneNodes, 1);
     assert.equal(payload.graph.canonicalIds, 1);
-    assert.equal(payload.graph.assets, 1);
-    assert.equal(payload.graph.archives, 2);
-    assert.equal(payload.version, '1.5.3');
+    assert.equal(payload.graph.assets, 2);
+    assert.equal(payload.graph.archives, 1);
+    assert.equal(payload.version, '1.6.0');
 });
 
 test('status dashboard centers each status line under the mark', () => {

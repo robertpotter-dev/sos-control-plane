@@ -35,9 +35,11 @@ test('help colors sos fetch like the other commands', async () => {
         const fetchLine = colorizeHelp('  sos fetch           Download remote video/audio into a domain inbox for ingest.');
         const ingestLine = colorizeHelp('  sos ingest          Run the local sensor pipeline and create deterministic debrief records.');
         const upgradeLine = colorizeHelp('  sos upgrade         Overlay the control plane onto this instance.');
+        const traceLine = colorizeHelp('  sos trace           Follow evidence linked from one exact Tier 1 node.');
         assert.match(fetchLine, /\u001b\[96msos fetch\u001b\[0m/);
         assert.match(ingestLine, /\u001b\[96msos ingest\u001b\[0m/);
         assert.match(upgradeLine, /\u001b\[96msos upgrade\u001b\[0m/);
+        assert.match(traceLine, /\u001b\[96msos trace\u001b\[0m/);
         const page = colorizeHelp('Requirements\n  yt-dlp              Required.');
         assert.match(page, /\u001b\[1mRequirements\u001b\[0m/);
     } finally {

@@ -207,7 +207,7 @@ function journalSyncFixture(systemName) {
 }
 
 test('sos sync stamps a new vault charter and refuses a foreign owner without --force', () => {
-    const { fixture, vaultParent } = journalSyncFixture('Robert Potter Work');
+    const { fixture, vaultParent } = journalSyncFixture('Example Work System');
     const env = { ...process.env, SOS_ROOT: fixture, NO_COLOR: '1' };
     delete env.SOS_OBSIDIAN_ROOT;
 
@@ -218,11 +218,11 @@ test('sos sync stamps a new vault charter and refuses a foreign owner without --
     });
     assert.equal(first.status, 0, first.stderr || first.stdout);
     const charter = join(vaultParent, 'Journal', 'Journal Charter.md');
-    assert.match(readFileSync(charter, 'utf-8'), /compiled_from: "Robert Potter Work"/);
+    assert.match(readFileSync(charter, 'utf-8'), /compiled_from: "Example Work System"/);
 
     writeFileSync(charter, [
         '---',
-        'compiled_from: "Robert Potter Me"',
+        'compiled_from: "Example Personal System"',
         'id: "jrnl:charter"',
         'parent: "jrnl:charter"',
         'related: []',
@@ -249,7 +249,7 @@ test('sos sync stamps a new vault charter and refuses a foreign owner without --
     assert.equal(blocked.status, 1, blocked.stderr || blocked.stdout);
     const payload = JSON.parse(blocked.stdout);
     assert.equal(payload.ok, false);
-    assert.match(payload.error, /already exists under a different system "Robert Potter Me"/);
+    assert.match(payload.error, /already exists under a different system "Example Personal System"/);
     assert.doesNotMatch(payload.error, /init --domain/);
     assert.equal(readFileSync(join(vaultParent, 'Journal', 'marker.md'), 'utf-8'), 'untouched\n');
     assert.match(readFileSync(charter, 'utf-8'), /Keep me/);
@@ -260,11 +260,11 @@ test('sos sync stamps a new vault charter and refuses a foreign owner without --
         encoding: 'utf-8'
     });
     assert.equal(forced.status, 0, forced.stderr || forced.stdout);
-    assert.match(readFileSync(charter, 'utf-8'), /compiled_from: "Robert Potter Work"/);
+    assert.match(readFileSync(charter, 'utf-8'), /compiled_from: "Example Work System"/);
 });
 
 test('sos sync stops on an unstamped existing vault charter', () => {
-    const { fixture, vaultParent } = journalSyncFixture('Robert Potter Me');
+    const { fixture, vaultParent } = journalSyncFixture('Example Personal System');
     mkdirSync(join(vaultParent, 'Journal'), { recursive: true });
     writeFileSync(join(vaultParent, 'Journal', 'Journal Charter.md'), [
         '---',

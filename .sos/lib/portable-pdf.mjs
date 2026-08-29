@@ -11,7 +11,7 @@ export function formatPdfPages(text) {
 export function extractPdfWithPoppler(sourcePath) {
     if (!commandExists('pdftotext')) {
         throw new Error(
-            "pdftotext is required for PDF extraction on this platform. Install poppler-utils (Linux), poppler (macOS/Windows), or use 'sos ingest --frontier'."
+            "pdftotext is required for PDF extraction on this platform. The source remains in inbox; install poppler-utils (Linux) or poppler (macOS/Windows), then ingest again."
         );
     }
     const result = spawnSync('pdftotext', ['-layout', '-enc', 'UTF-8', sourcePath, '-'], {

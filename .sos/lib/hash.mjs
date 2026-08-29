@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync, writeFileSync } from 'fs';
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 
 import { parseFrontmatter } from './frontmatter.mjs';
@@ -61,17 +61,4 @@ export function allocateDuplicateArchivePath(archiveDir, baseName, extension) {
         target = join(archiveDir, `${baseName}-duplicate-${counter}${extension}`);
     }
     return target;
-}
-
-export function recordSha256InJson(jsonPath, hex) {
-    if (!existsSync(jsonPath)) return false;
-    try {
-        const parsed = JSON.parse(readFileSync(jsonPath, 'utf-8'));
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
-        parsed.source_sha256 = hex;
-        writeFileSync(jsonPath, `${JSON.stringify(parsed, null, 2)}\n`, 'utf-8');
-        return true;
-    } catch {
-        return false;
-    }
 }

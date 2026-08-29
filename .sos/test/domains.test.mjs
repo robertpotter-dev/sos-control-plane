@@ -7,7 +7,7 @@ import test from 'node:test';
 import { discoverDomains } from '../lib/domains.mjs';
 import { resolveRepoRoot } from '../lib/root.mjs';
 
-test('discoverDomains takes the namespace from id when title contains a colon', () => {
+test('discoverDomains derives the full namespace from the domain folder', () => {
     const root = mkdtempSync(join(os.tmpdir(), 'sos-domains-'));
     mkdirSync(join(root, 'journal'));
     writeFileSync(join(root, 'journal', 'SPACE.md'), [
@@ -33,7 +33,7 @@ test('discoverDomains takes the namespace from id when title contains a colon', 
     const domains = discoverDomains(root);
     assert.equal(domains.length, 1);
     assert.equal(domains[0].name, 'journal');
-    assert.equal(domains[0].prefix, 'jrnl');
+    assert.equal(domains[0].prefix, 'journal');
     assert.equal(domains[0].title, 'Journal: Daily Log');
     assert.equal(domains[0].vaultName, 'Journal');
     assert.equal(domains[0].exposure, 'private');

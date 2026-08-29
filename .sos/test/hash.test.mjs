@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import os from 'node:os';
 import test from 'node:test';
 
-import { allocateDuplicateArchivePath, archiveMatchesSource, findAssetBySourceSha256, recordSha256InJson, sha256File } from '../lib/hash.mjs';
+import { allocateDuplicateArchivePath, archiveMatchesSource, findAssetBySourceSha256, sha256File } from '../lib/hash.mjs';
+import { readJsonRecords, writeJsonl } from '../lib/jsonl.mjs';
+import { mediaTitle, normalizeWhisperSegments } from '../lib/transcribe.mjs';
 
 const SOURCE_ROOT = join(import.meta.dirname, '..', '..');
 
@@ -43,12 +45,29 @@ test('findAssetBySourceSha256 reads the stored capture hash', () => {
     assert.equal(findAssetBySourceSha256(join(root, 'assets'), '0'.repeat(64)), null);
 });
 
-test('recordSha256InJson stores the hash on Whisper telemetry objects', () => {
-    const root = mkdtempSync(join(os.tmpdir(), 'sos-hash-json-'));
-    const jsonPath = join(root, 'transcript.json');
-    writeFileSync(jsonPath, `${JSON.stringify({ transcription: [] }, null, 2)}\n`);
-    assert.equal(recordSha256InJson(jsonPath, 'a'.repeat(64)), true);
-    assert.equal(JSON.parse(readFileSync(jsonPath, 'utf-8')).source_sha256, 'a'.repeat(64));
+test('Whisper observations normalize to independently addressable JSONL records', () => {
+    const hash = 'a'.repeat(64);
+    const records = normalizeWhisperSegments({
+        params: { model: '/models/ggml-base.en.bin', language: 'en' },
+        transcription: [
+            { timestamps: { from: '00:00:00,000', to: '00:00:01,250' }, offsets: { from: 0, to: 1250 }, text: ' First.' },
+            { timestamps: { from: '00:00:01,250', to: '00:00:02,500' }, offsets: { from: 1250, to: 2500 }, text: ' Second.' }
+        ]
+    }, { sourceSha256: hash, sourceFile: 'memo.wav' });
+    assert.equal(records.length, 2);
+    assert.equal(records[0].record_id, 'whisper:aaaaaaaaaaaaaaaa:000001');
+    assert.equal(records[1].index_line, 2);
+    assert.equal(records[1].start_ms, 1250);
+
+    const root = mkdtempSync(join(os.tmpdir(), 'sos-whisper-jsonl-'));
+    const indexPath = join(root, 'transcript.segments.jsonl');
+    writeJsonl(indexPath, records);
+    assert.equal(readFileSync(indexPath, 'utf-8').trim().split('\n').length, 2);
+    assert.deepEqual(readJsonRecords(indexPath), records);
+});
+
+test('mediaTitle removes capture separators without leaving presentation whitespace', () => {
+    assert.equal(mediaTitle('The_Architecture_of_Context_Inversion_'), 'The Architecture Of Context Inversion');
 });
 
 function journalFixture() {
@@ -200,6 +219,24 @@ test('transcribe dry-run allocates a new slug when the same-name archive has a d
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.match(result.stdout, /COLLISION PREVENTION/);
     assert.match(result.stdout, /transcript-memo-2\.md/);
+    assert.match(result.stdout, /journal\/assets\/transcript-memo-2\.segments\.jsonl/);
+    assert.doesNotMatch(result.stdout, /inbox\/archive\/transcript-memo-2\.segments\.jsonl/);
     assert.doesNotMatch(result.stdout, /DEDUPLICATION SAFEGUARD/);
     assert.doesNotMatch(result.stdout, /whisper-cli|Downloading Whisper/);
+});
+
+test('video dry-run plans only a readable transcript and segment JSONL before raw archival', () => {
+    const root = journalFixture();
+    const video = join(root, 'journal', 'inbox', 'lecture.mp4');
+    writeFileSync(video, Buffer.from('video-fixture'));
+    const result = spawnSync(process.execPath, [join(SOURCE_ROOT, '.sos', 'lib', 'transcribe.mjs'), video, '--domain', 'journal', '--dry-run'], {
+        cwd: SOURCE_ROOT,
+        env: { ...process.env, SOS_ROOT: root, NO_COLOR: '1' },
+        encoding: 'utf-8'
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /transcript-lecture\.md/);
+    assert.match(result.stdout, /transcript-lecture\.segments\.jsonl/);
+    assert.match(result.stdout, /inbox\/archive\/lecture\.mp4/);
+    assert.doesNotMatch(result.stdout, /keyframe|\.jpg|vision/i);
 });

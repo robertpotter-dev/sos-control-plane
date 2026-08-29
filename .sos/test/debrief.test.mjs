@@ -7,6 +7,7 @@ import os from 'node:os';
 
 import { isDebriefRecord, writeDebriefRecord } from '../lib/debrief.mjs';
 import { sha256File } from '../lib/hash.mjs';
+import { readJsonRecords } from '../lib/jsonl.mjs';
 
 test('folder batches produce one deterministic record with every source pointer', () => {
     const root = mkdtempSync(join(os.tmpdir(), 'sos-debrief-'));
@@ -21,7 +22,8 @@ test('folder batches produce one deterministic record with every source pointer'
         label: '2026-08-16',
         scope: 'batch',
         dryRun: true,
-        manifest: [
+        t2RecordPath: join(domainPath, 'assets', 'batch-2026-08-16.md'),
+        rows: [
             { originalPath: 'journal/inbox/2026-08-16/morning.md', archivePath: join(inbox, 'archive', '2026-08-16', 'morning.md'), artifacts: [join(domainPath, 'assets', 'text-morning.md')] },
             { originalPath: 'journal/inbox/2026-08-16/evening.m4a', archivePath: join(inbox, 'archive', '2026-08-16', 'evening.m4a'), artifacts: [join(domainPath, 'assets', 'transcript-evening.md')] }
         ]
@@ -32,6 +34,7 @@ test('folder batches produce one deterministic record with every source pointer'
   assert.match(record.content, /\*\*Scope:\*\* Folder batch/);
   assert.match(record.content, /morning\.md/);
   assert.match(record.content, /transcript-evening\.md/);
+  assert.match(record.content, /batch-2026-08-16\.md/);
   assert.match(record.content, /Graph Weave \(Required Before Tier 1 Approval\)/);
   assert.match(record.content, /no new edge is warranted/);
 });
@@ -82,6 +85,15 @@ test('ingest rmdirs an empty batch source folder after archiving its contents', 
     assert.equal(existsSync(batch), false);
     assert.equal(existsSync(join(root, 'journal', 'inbox', 'archive', 'site-visit', 'evening.txt')), true);
     assert.equal(existsSync(join(root, 'journal', 'inbox', 'archive', 'site-visit', 'notes', 'morning.md')), true);
+    assert.equal(payload.units[0].t2Record, 'journal/assets/batch-intake-site-visit.md');
+    assert.ok(payload.units[0].assets.includes('journal/assets/batch-inventory-site-visit.jsonl'));
+    const intake = readFileSync(join(root, 'journal', 'assets', 'batch-intake-site-visit.md'), 'utf-8');
+    assert.match(intake, /Batch Inventory/);
+    assert.match(intake, /batch-inventory-site-visit\.jsonl/);
+    const inventory = readJsonRecords(join(root, 'journal', 'assets', 'batch-inventory-site-visit.jsonl'));
+    assert.equal(inventory.length, 2);
+    assert.deepEqual(inventory.map(row => row.source_file), ['evening.txt', 'notes/morning.md']);
+    assert.equal(inventory.every(row => row.source_sha256 && row.bytes > 0 && row.sensor === 'builtin:text'), true);
 });
 
 test('ingest rmdirs a batch source folder whose only remainder is Finder metadata', () => {
@@ -102,7 +114,7 @@ test('ingest rmdirs a batch source folder whose only remainder is Finder metadat
     assert.equal(existsSync(join(root, 'journal', 'inbox', 'archive', 'site-visit', 'morning.md')), true);
 });
 
-test('ingest keeps a batch source folder when leftover captures remain', () => {
+test('a failed batch restores every source and removes generated partial output', () => {
     const root = mkdtempSync(join(os.tmpdir(), 'sos-ingest-rmdir-keep-'));
     const batch = join(root, 'journal', 'inbox', 'site visit');
     mkdirSync(join(batch, 'notes'), { recursive: true });
@@ -119,8 +131,12 @@ test('ingest keeps a batch source folder when leftover captures remain', () => {
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, false);
     assert.equal(existsSync(join(batch, 'broken.pdf')), true);
-    assert.equal(existsSync(join(batch, 'notes')), false);
-    assert.equal(existsSync(join(root, 'journal', 'inbox', 'archive', 'site-visit', 'notes', 'morning.md')), true);
+    assert.equal(existsSync(join(batch, 'notes', 'morning.md')), true);
+    assert.equal(existsSync(join(root, 'journal', 'inbox', 'archive', 'site-visit', 'notes', 'morning.md')), false);
+    assert.equal(existsSync(join(root, 'journal', 'assets', 'text-morning.md')), false);
+    assert.equal(payload.units[0].debrief, null);
+    assert.equal(payload.units[0].t2Record, null);
+    assert.equal(payload.units[0].archive, null);
 });
 
 test('dry-run PDF captures plan a Tier 2 verbatim asset', () => {
@@ -142,7 +158,114 @@ test('dry-run PDF captures plan a Tier 2 verbatim asset', () => {
     assert.equal(payload.units[0].debrief, 'journal/inbox/debrief-whitepaper.md');
     assert.match(payload.units[0].sourceSha256, /^[a-f0-9]{64}$/);
     assert.equal(payload.units[0].archive, 'journal/inbox/archive/whitepaper.pdf');
-    assert.deepEqual(payload.units[0].assets, ['journal/assets/pdf-whitepaper.md']);
+    assert.deepEqual(payload.units[0].assets, [
+        'journal/assets/pdf-whitepaper.md'
+    ]);
+    assert.equal(payload.units[0].t2Record, 'journal/assets/pdf-whitepaper.md');
+});
+
+test('frontier escalation archives the source and records the declined local baseline', () => {
+    const root = mkdtempSync(join(os.tmpdir(), 'sos-frontier-ingest-'));
+    const inbox = join(root, 'journal', 'inbox');
+    mkdirSync(inbox, { recursive: true });
+    writeFileSync(join(root, 'journal', 'SPACE.md'), '---\nid: "jrnl:charter"\nexposure: "private"\n---\n', 'utf-8');
+    writeFileSync(join(inbox, 'rough mix.wav'), 'not real audio', 'utf-8');
+
+    const result = spawnSync(process.execPath, ['.sos/sos.mjs', 'ingest', 'journal/inbox/rough mix.wav', '--frontier', '--request', 'Analyze this as a song: arrangement and mix.', '--json'], {
+        cwd: join(import.meta.dirname, '..', '..'),
+        env: { ...process.env, SOS_ROOT: root, NO_COLOR: '1' },
+        encoding: 'utf-8'
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.units[0].frontier, true);
+    assert.equal(payload.units[0].request, 'Analyze this as a song: arrangement and mix.');
+    assert.equal(payload.units[0].t2Record, 'journal/assets/frontier-intake-rough-mix.md');
+    assert.equal(payload.units[0].archive, 'journal/inbox/archive/rough mix.wav');
+    const intake = readFileSync(join(root, 'journal', 'assets', 'frontier-intake-rough-mix.md'), 'utf-8');
+    assert.match(intake, /type: "frontier-intake"/);
+    assert.match(intake, /provenance: "frontier-handoff"/);
+    assert.match(intake, /Analyze this as a song: arrangement and mix/);
+    assert.match(intake, /Local Whisper transcript and timestamped segment index \(builtin:media\) was available and explicitly declined/);
+    assert.equal(existsSync(join(inbox, 'rough mix.wav')), false);
+    assert.equal(existsSync(join(root, 'journal', 'inbox', 'archive', 'rough mix.wav')), true);
+});
+
+test('frontier escalation requires an explicit request', () => {
+    const root = mkdtempSync(join(os.tmpdir(), 'sos-frontier-request-'));
+    const inbox = join(root, 'journal', 'inbox');
+    mkdirSync(inbox, { recursive: true });
+    writeFileSync(join(root, 'journal', 'SPACE.md'), '---\nid: "jrnl:charter"\nexposure: "private"\n---\n', 'utf-8');
+    writeFileSync(join(inbox, 'clip.wav'), 'audio', 'utf-8');
+
+    const result = spawnSync(process.execPath, ['.sos/lib/ingest.mjs', 'journal/inbox/clip.wav', '--frontier', '--json'], {
+        cwd: join(import.meta.dirname, '..', '..'),
+        env: { ...process.env, SOS_ROOT: root, NO_COLOR: '1' },
+        encoding: 'utf-8'
+    });
+    assert.equal(result.status, 1);
+    assert.match(JSON.parse(result.stdout).error, /requires --request/);
+    assert.equal(existsSync(join(inbox, 'clip.wav')), true);
+});
+
+test('frontier dry-run returns a factual batch plan without changing custody', () => {
+    const root = mkdtempSync(join(os.tmpdir(), 'sos-frontier-plan-'));
+    const batch = join(root, 'journal', 'inbox', 'album sketches');
+    mkdirSync(join(batch, 'takes'), { recursive: true });
+    writeFileSync(join(root, 'journal', 'SPACE.md'), '---\nid: "jrnl:charter"\nexposure: "private"\n---\n', 'utf-8');
+    writeFileSync(join(batch, 'notes.txt'), 'The chorus arrives late.\n', 'utf-8');
+    writeFileSync(join(batch, 'takes', 'rough.wav'), 'not real audio', 'utf-8');
+
+    const result = spawnSync(process.execPath, ['.sos/sos.mjs', 'ingest', 'journal/inbox/album sketches', '--frontier', '--request', 'Analyze this collection as an album project.', '--dry-run', '--json'], {
+        cwd: join(import.meta.dirname, '..', '..'),
+        env: { ...process.env, SOS_ROOT: root, NO_COLOR: '1' },
+        encoding: 'utf-8'
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const payload = JSON.parse(result.stdout);
+    const plan = payload.units[0].plan;
+    assert.deepEqual(plan.byType, { text: 1, media: 1 });
+    assert.equal(plan.mode, 'frontier');
+    assert.equal(plan.scope, 'batch');
+    assert.equal(plan.captures, 2);
+    assert.ok(plan.bytes > 0);
+    assert.deepEqual(plan.unknown, []);
+    assert.deepEqual(plan.localBaselines.map(baseline => baseline.route), ['builtin:text', 'builtin:media']);
+    assert.equal(plan.plannedOutputs.intake, 'journal/assets/frontier-batch-intake-album-sketches.md');
+    assert.equal(plan.plannedOutputs.inventory, 'journal/assets/frontier-batch-inventory-album-sketches.jsonl');
+    assert.equal(existsSync(join(batch, 'notes.txt')), true);
+    assert.equal(existsSync(join(root, 'journal', 'assets')), false);
+    assert.equal(existsSync(join(root, 'journal', 'inbox', 'archive')), false);
+});
+
+test('frontier batch creates one handoff and a complete source inventory', () => {
+    const root = mkdtempSync(join(os.tmpdir(), 'sos-frontier-batch-'));
+    const batch = join(root, 'journal', 'inbox', 'album sketches');
+    mkdirSync(join(batch, 'takes'), { recursive: true });
+    writeFileSync(join(root, 'journal', 'SPACE.md'), '---\nid: "jrnl:charter"\nexposure: "private"\n---\n', 'utf-8');
+    writeFileSync(join(batch, 'notes.txt'), 'The chorus arrives late.\n', 'utf-8');
+    writeFileSync(join(batch, 'takes', 'rough.wav'), 'not real audio', 'utf-8');
+
+    const result = spawnSync(process.execPath, ['.sos/sos.mjs', 'ingest', 'journal/inbox/album sketches', '--frontier', '--request', 'Analyze this collection as an album project.', '--json'], {
+        cwd: join(import.meta.dirname, '..', '..'),
+        env: { ...process.env, SOS_ROOT: root, NO_COLOR: '1' },
+        encoding: 'utf-8'
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.units[0].t2Record, 'journal/assets/frontier-batch-intake-album-sketches.md');
+    assert.ok(payload.units[0].assets.includes('journal/assets/frontier-batch-inventory-album-sketches.jsonl'));
+    const intake = readFileSync(join(root, 'journal', 'assets', 'frontier-batch-intake-album-sketches.md'), 'utf-8');
+    assert.match(intake, /type: "frontier-batch-intake"/);
+    assert.match(intake, /frontier-batch-inventory-album-sketches\.jsonl/);
+    const inventory = readJsonRecords(join(root, 'journal', 'assets', 'frontier-batch-inventory-album-sketches.jsonl'));
+    assert.equal(inventory.length, 2);
+    assert.deepEqual(inventory.map(row => row.source_file), ['notes.txt', 'takes/rough.wav']);
+    assert.equal(inventory[0].local_baseline.route, 'builtin:text');
+    assert.equal(inventory[1].local_baseline.route, 'builtin:media');
+    assert.equal(existsSync(batch), false);
+    assert.equal(existsSync(join(root, 'journal', 'inbox', 'archive', 'album-sketches', 'takes', 'rough.wav')), true);
 });
 
 test('ingest skips PDFKit when a hashed pdf-capture already exists', () => {
@@ -239,7 +362,7 @@ function minimalPdf(text) {
     return Buffer.from(body, 'latin1');
 }
 
-test('ingest extracts PDF text into a hashed Tier 2 capture and skips a duplicate', () => {
+test('ingest extracts PDF text into a hashed Tier 2 capture and skips a duplicate', t => {
     const root = mkdtempSync(join(os.tmpdir(), 'sos-ingest-pdf-live-'));
     const inbox = join(root, 'journal', 'inbox');
     mkdirSync(inbox, { recursive: true });
@@ -269,6 +392,10 @@ test('ingest extracts PDF text into a hashed Tier 2 capture and skips a duplicat
         env: { ...process.env, SOS_ROOT: root, NO_COLOR: '1' },
         encoding: 'utf-8'
     });
+    if (first.status !== 0 && /SDK is not supported|could not build Objective-C module|Swift PDFKit failed[\s\S]*pdftotext is required/.test(first.stdout + first.stderr)) {
+        t.skip('Optional local PDF engines are unavailable or the installed Swift SDK is incompatible.');
+        return;
+    }
     assert.equal(first.status, 0, first.stderr || first.stdout);
     const firstPayload = JSON.parse(first.stdout);
     assert.equal(firstPayload.ok, true);
@@ -345,7 +472,7 @@ test('init creates portable identity configuration only when explicitly requeste
     const sourceLib = join(import.meta.dirname, '..', 'lib');
     mkdirSync(join(root, '.sos', 'lib'), { recursive: true });
     writeFileSync(join(root, 'package.json'), '{"name":"fixture","type":"module"}\n', 'utf-8');
-    for (const name of ['domains.mjs', 'frontmatter.mjs', 'relations.mjs', 'root.mjs', 'yaml.mjs']) {
+    for (const name of ['domains.mjs', 'frontmatter.mjs', 'identity.mjs', 'relations.mjs', 'root.mjs', 'yaml.mjs']) {
         copyFileSync(join(sourceLib, name), join(root, '.sos', 'lib', name));
     }
     mkdirSync(join(root, '.sos', 'vendor'), { recursive: true });
@@ -359,7 +486,9 @@ test('init creates portable identity configuration only when explicitly requeste
     assert.equal(existsSync(join(root, 'sos.config.json')), false);
     assert.equal(JSON.parse(readFileSync(join(root, '.sos', 'config.json'), 'utf-8')).systemName, 'Fixture System');
     assert.equal(existsSync(join(root, 'journal', 'SPACE.md')), true);
-    assert.match(readFileSync(join(root, 'journal', 'SPACE.md'), 'utf-8'), /Charter it in debrief before minting notes/);
+    const journalCharter = readFileSync(join(root, 'journal', 'SPACE.md'), 'utf-8');
+    assert.match(journalCharter, /id: "journal:charter"/);
+    assert.match(journalCharter, /Charter it in debrief before minting notes/);
 
     const addDomain = spawnSync(process.execPath, [join(import.meta.dirname, '..', 'sos.mjs'), 'init', '--domain', 'research:public'], {
         cwd: root,
@@ -383,7 +512,7 @@ test('init --name persists onto an existing unzip config that has no systemName'
     mkdirSync(join(root, '.sos', 'lib'), { recursive: true });
     writeFileSync(join(root, 'package.json'), '{"name":"fixture","type":"module"}\n', 'utf-8');
     writeFileSync(join(root, '.sos', 'config.json'), '{"version":1,"vaults":[],"mirrors":[]}\n', 'utf-8');
-    for (const name of ['domains.mjs', 'frontmatter.mjs', 'relations.mjs', 'root.mjs', 'yaml.mjs']) {
+    for (const name of ['domains.mjs', 'frontmatter.mjs', 'identity.mjs', 'relations.mjs', 'root.mjs', 'yaml.mjs']) {
         copyFileSync(join(sourceLib, name), join(root, '.sos', 'lib', name));
     }
     mkdirSync(join(root, '.sos', 'vendor'), { recursive: true });
@@ -392,7 +521,7 @@ test('init --name persists onto an existing unzip config that has no systemName'
     const result = spawnSync(process.execPath, [
         join(import.meta.dirname, '..', 'sos.mjs'),
         'init',
-        '--name', 'Robert Potter Me',
+        '--name', 'Example Personal System',
         '--vault', '/tmp/Obsidian',
         '--mirror', '/tmp/AI',
         '--domain', 'personal:private'
@@ -402,10 +531,10 @@ test('init --name persists onto an existing unzip config that has no systemName'
     });
     assert.equal(result.status, 0, result.stderr);
     const config = JSON.parse(readFileSync(join(root, '.sos', 'config.json'), 'utf-8'));
-    assert.equal(config.systemName, 'Robert Potter Me');
+    assert.equal(config.systemName, 'Example Personal System');
     assert.deepEqual(config.vaults, ['/tmp/Obsidian']);
     assert.deepEqual(config.mirrors, ['/tmp/AI']);
-    assert.match(result.stdout, /Labeled Robert Potter Me/);
+    assert.match(result.stdout, /Labeled Example Personal System/);
     assert.match(result.stdout, /Configured vault \/tmp\/Obsidian and mirror \/tmp\/AI/);
 });
 
@@ -414,7 +543,7 @@ test('init --name writes vaults and mirrors arrays from --vault and --mirror', (
     const sourceLib = join(import.meta.dirname, '..', 'lib');
     mkdirSync(join(root, '.sos', 'lib'), { recursive: true });
     writeFileSync(join(root, 'package.json'), '{"name":"fixture","type":"module"}\n', 'utf-8');
-    for (const name of ['domains.mjs', 'frontmatter.mjs', 'relations.mjs', 'root.mjs', 'yaml.mjs']) {
+    for (const name of ['domains.mjs', 'frontmatter.mjs', 'identity.mjs', 'relations.mjs', 'root.mjs', 'yaml.mjs']) {
         copyFileSync(join(sourceLib, name), join(root, '.sos', 'lib', name));
     }
     mkdirSync(join(root, '.sos', 'vendor'), { recursive: true });
@@ -445,7 +574,7 @@ test('init mints domains without a dashboard label and relocates a legacy root c
     const sourceLib = join(import.meta.dirname, '..', 'lib');
     mkdirSync(join(root, '.sos', 'lib'), { recursive: true });
     writeFileSync(join(root, 'package.json'), '{"name":"fixture","type":"module"}\n', 'utf-8');
-    for (const name of ['domains.mjs', 'frontmatter.mjs', 'relations.mjs', 'root.mjs', 'yaml.mjs']) {
+    for (const name of ['domains.mjs', 'frontmatter.mjs', 'identity.mjs', 'relations.mjs', 'root.mjs', 'yaml.mjs']) {
         copyFileSync(join(sourceLib, name), join(root, '.sos', 'lib', name));
     }
     mkdirSync(join(root, '.sos', 'vendor'), { recursive: true });

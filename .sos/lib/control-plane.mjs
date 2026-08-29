@@ -1,8 +1,8 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
 import { basename, dirname, join } from 'path';
 
-export const CONTROL_PLANE_FILES = ['AGENTS.md', 'DEBRIEF.md', 'SETUP.md', 'package.json', '.gitignore', '.sos/sos.mjs'];
-export const CONTROL_PLANE_DIRS = ['.sos/lib', '.sos/test', '.sos/vendor'];
+export const CONTROL_PLANE_FILES = ['AGENTS.md', 'DEBRIEF.md', 'SETUP.md', 'README.md', 'package.json', '.gitignore', '.sos/sos.mjs', '.sos/plugins/SENSOR-PROTOCOL.md'];
+export const CONTROL_PLANE_DIRS = ['.sos/lib', '.sos/test', '.sos/vendor', '.sos/hooks'];
 export const KERNEL_PLUGIN_DIRS = ['apple-metal', 'linux', 'windows'];
 export const CONTROL_PLANE_OBSOLETE = ['.tooling', 'bin', 'test', '.sos/plugins/linux-metal', '.sos/plugins/windows-metal'];
 export const DEFAULT_CONTROL_PLANE_NAME = 'SOS Control Plane';

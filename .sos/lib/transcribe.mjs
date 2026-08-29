@@ -1,4 +1,4 @@
-import { execFileSync, execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import {
     copyFileSync,
     existsSync,
@@ -15,10 +15,10 @@ import { basename, dirname, extname, join, relative, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 
 import { discoverDomains, REPO_ROOT } from './domains.mjs';
-import { parseFrontmatter } from './frontmatter.mjs';
-import { allocateDuplicateArchivePath, archiveMatchesSource, findAssetBySourceSha256, readSourceSha256, recordSha256InJson, sha256File } from './hash.mjs';
+import { allocateDuplicateArchivePath, archiveMatchesSource, findAssetBySourceSha256, readSourceSha256, sha256File } from './hash.mjs';
+import { readJsonRecords, writeJsonl } from './jsonl.mjs';
+import { ui } from './terminal.mjs';
 import { commandExists, findWhisperCli } from './tools.mjs';
-import { formatKeyframeVisionSection, runKeyframeVision } from './vision.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -29,6 +29,30 @@ const MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${D
 const MODEL_PATH = join(MODEL_DIR, DEFAULT_MODEL);
 
 const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.m4v', '.mkv', '.webm', '.avi'];
+
+export function mediaTitle(baseName) {
+    return String(baseName).replace(/[_-]+/g, ' ').replace(/\b\w/g, character => character.toUpperCase()).trim();
+}
+
+export function normalizeWhisperSegments(telemetry, { sourceSha256, sourceFile }) {
+    const language = telemetry.result?.language || telemetry.params?.language || null;
+    const model = basename(telemetry.params?.model || DEFAULT_MODEL);
+    return (telemetry.transcription || []).map((segment, index) => ({
+        record_id: `whisper:${sourceSha256.slice(0, 16)}:${String(index + 1).padStart(6, '0')}`,
+        source_file: sourceFile,
+        source_sha256: sourceSha256,
+        segment_index: index,
+        index_line: index + 1,
+        start_ms: segment.offsets?.from ?? null,
+        end_ms: segment.offsets?.to ?? null,
+        start_timestamp: segment.timestamps?.from ?? null,
+        end_timestamp: segment.timestamps?.to ?? null,
+        text: String(segment.text || '').trim(),
+        engine: 'whisper.cpp',
+        model,
+        language
+    }));
+}
 
 function localDateString(date = new Date()) {
     const year = date.getFullYear();
@@ -58,44 +82,9 @@ function convertToWav(absInput, tempWav, ext) {
         return;
     }
     if (!commandExists('ffmpeg')) {
-        throw new Error('ffmpeg is required to convert audio or video on this platform. Install ffmpeg, or use sos ingest --frontier.');
+        throw new Error('ffmpeg is required to convert audio or video on this platform. The source remains in inbox; install ffmpeg or provide a local sensor plugin, then ingest again.');
     }
     execFileSync('ffmpeg', ['-y', '-i', absInput, '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', tempWav], { stdio: 'pipe' });
-}
-
-function extractKeyframe(videoPath, targetAssetPath) {
-    const targetDir = dirname(targetAssetPath);
-    mkdirSync(targetDir, { recursive: true });
-
-    if (process.platform === 'darwin') {
-        try {
-            const tempThumbDir = join(os.tmpdir(), `ql_thumb_${Date.now()}`);
-            mkdirSync(tempThumbDir, { recursive: true });
-            execSync(`qlmanage -t -s 1280 -o "${tempThumbDir}" "${videoPath}"`, { stdio: 'pipe' });
-            const generatedPng = join(tempThumbDir, `${basename(videoPath)}.png`);
-            if (existsSync(generatedPng)) {
-                execSync(`sips -s format jpeg -s formatOptions 85 "${generatedPng}" --out "${targetAssetPath}"`, { stdio: 'pipe' });
-                unlinkSync(generatedPng);
-                console.log(`Extracted hero keyframe: ${targetAssetPath}`);
-                return true;
-            }
-        } catch (error) {
-            console.warn(`Quick Look keyframe failed: ${error.message}`);
-        }
-    }
-
-    if (commandExists('ffmpeg')) {
-        try {
-            execFileSync('ffmpeg', ['-y', '-ss', '1', '-i', videoPath, '-frames:v', '1', targetAssetPath], { stdio: 'pipe' });
-            if (existsSync(targetAssetPath)) {
-                console.log(`Extracted hero keyframe: ${targetAssetPath}`);
-                return true;
-            }
-        } catch (error) {
-            console.warn(`Could not extract keyframe: ${error.message}`);
-        }
-    }
-    return false;
 }
 
 export function transcribe(inputFile, targetDir = null, requestedDomain = null, options = {}) {
@@ -121,8 +110,8 @@ export function transcribe(inputFile, targetDir = null, requestedDomain = null, 
         throw new Error(`Cannot resolve a domain for ${absInput}. Pass --domain <name>.`);
     }
     const domainName = domain.name;
-    const parentNode = parseFrontmatter(readFileSync(domain.spaceFile, 'utf-8'))?.id || `${domain.prefix}:charter`;
-    const domainPrefix = parentNode.split(':')[0];
+    const parentNode = `${domain.prefix}:charter`;
+    const domainPrefix = domain.prefix;
 
     const assetDir = targetDir ? resolve(targetDir) : join(REPO_ROOT, domainName, 'assets');
     if (!dryRun) mkdirSync(assetDir, { recursive: true });
@@ -141,11 +130,11 @@ export function transcribe(inputFile, targetDir = null, requestedDomain = null, 
     const sourceSha256 = sha256File(absInput);
     let slug = baseSlug;
     let finalMdPath = join(assetDir, `transcript-${slug}.md`);
-    let jsonTelemetryPath = join(archiveDir, `transcript-${slug}.json`);
+    let segmentIndexPath = join(assetDir, `transcript-${slug}.segments.jsonl`);
     let archivePath = join(archiveDir, archiveFilename);
 
     function preserveDuplicate(existingTranscript) {
-        console.log(`\n🛡️ [DEDUPLICATION SAFEGUARD]`);
+        console.log(`\n${ui.warning('DEDUPLICATION SAFEGUARD')}`);
         console.log(`  SHA-256 match: ${sourceSha256}`);
         console.log(`  Existing Transcript (Tier 2): ${existingTranscript}`);
         console.log(`  Skipping redundant Whisper run to conserve compute.`);
@@ -159,15 +148,23 @@ export function transcribe(inputFile, targetDir = null, requestedDomain = null, 
             } else {
                 mkdirSync(archiveDir, { recursive: true });
                 renameSync(absInput, retainedArchivePath);
-                console.log(`  📦 Preserved duplicate source: ${retainedArchivePath}\n`);
+                console.log(`  Preserved duplicate source: ${retainedArchivePath}\n`);
             }
+        }
+        const existingIndex = join(dirname(existingTranscript), `${basename(existingTranscript, '.md')}.segments.jsonl`);
+        let recordCount = 0;
+        if (existsSync(existingIndex)) {
+            try {
+                recordCount = readJsonRecords(existingIndex).length;
+            } catch {}
         }
         return {
             archivePath: retainedArchivePath,
             deduplicated: true,
             domain: domainName,
             isVideo,
-            keyframePath: isVideo ? join(assetDir, `keyframe-${slug}.jpg`) : null,
+            segmentIndexPath: existsSync(existingIndex) ? existingIndex : null,
+            recordCount,
             sourcePath: absInput,
             sourceSha256,
             transcriptPath: existingTranscript
@@ -181,16 +178,16 @@ export function transcribe(inputFile, targetDir = null, requestedDomain = null, 
         let counter = 2;
         while (
             existsSync(join(assetDir, `transcript-${baseSlug}-${counter}.md`))
-            || existsSync(join(archiveDir, `transcript-${baseSlug}-${counter}.json`))
+            || existsSync(join(assetDir, `transcript-${baseSlug}-${counter}.segments.jsonl`))
             || existsSync(join(archiveDir, `${baseName}-${counter}${ext}`))
         ) {
             counter++;
         }
         slug = `${baseSlug}-${counter}`;
         finalMdPath = join(assetDir, `transcript-${slug}.md`);
-        jsonTelemetryPath = join(archiveDir, `transcript-${slug}.json`);
+        segmentIndexPath = join(assetDir, `transcript-${slug}.segments.jsonl`);
         archivePath = join(archiveDir, `${baseName}-${counter}${ext}`);
-        console.log(`\n⚠️ [COLLISION PREVENTION] Different media with name '${baseName}' detected.`);
+        console.log(`\n${ui.warning('COLLISION PREVENTION')} Different media with name '${baseName}' detected.`);
         console.log(`   Allocated safe non-destructive identifier: transcript-${slug}.md`);
     }
 
@@ -199,7 +196,7 @@ export function transcribe(inputFile, targetDir = null, requestedDomain = null, 
             return preserveDuplicate(finalMdPath);
         }
         allocateCollisionPaths();
-    } else if (existsSync(archivePath) || existsSync(jsonTelemetryPath)) {
+    } else if (existsSync(archivePath) || existsSync(segmentIndexPath)) {
         allocateCollisionPaths();
     }
 
@@ -208,7 +205,8 @@ export function transcribe(inputFile, targetDir = null, requestedDomain = null, 
         deduplicated: false,
         domain: domainName,
         isVideo,
-        keyframePath: isVideo ? join(assetDir, `keyframe-${slug}.jpg`) : null,
+        segmentIndexPath,
+        recordCount: 0,
         sourcePath: absInput,
         sourceSha256,
         transcriptPath: finalMdPath
@@ -217,42 +215,41 @@ export function transcribe(inputFile, targetDir = null, requestedDomain = null, 
     if (dryRun) {
         console.log(`  DRY Local Whisper [${domainName}]: ${basename(absInput)}`);
         console.log(`  DRY Transcript -> ${finalMdPath}`);
-        if (isVideo) console.log(`  DRY Keyframe -> ${plannedResult.keyframePath}`);
+        console.log(`  DRY Segment index -> ${segmentIndexPath}`);
         console.log(`  DRY Archive source -> ${archivePath}`);
         return plannedResult;
     }
 
     const whisperBin = findWhisperCli();
     if (!whisperBin) {
-        throw new Error('whisper-cli is required for speech. Install whisper.cpp and put whisper-cli on PATH, or use sos ingest --frontier.');
+        throw new Error('whisper-cli is required for speech. The source remains in inbox; install whisper.cpp and put whisper-cli on PATH, or provide a local transcription sensor, then ingest again.');
     }
     ensureModel();
 
     console.log(`\nIngesting media (${isVideo ? 'Video' : 'Audio'}): ${basename(absInput)}`);
     convertToWav(absInput, tempWav, ext);
 
-    let keyframeRelPath = null;
-    if (isVideo) {
-        const keyframeFilename = `keyframe-${slug}.jpg`;
-        const keyframeAbsPath = join(assetDir, keyframeFilename);
-        if (extractKeyframe(absInput, keyframeAbsPath)) {
-            keyframeRelPath = keyframeFilename;
-        }
-    }
-
     const outputBase = join(os.tmpdir(), `whisper_out_${Date.now()}`);
     console.log(`Transcribing with ${whisperBin}...`);
     execFileSync(whisperBin, ['-m', MODEL_PATH, '-f', tempWav, '-otxt', '-oj', '-of', outputBase], { stdio: 'pipe' });
 
-    // 6. Save Tier 3 Raw Machine JSON Telemetry
+    // 6. Normalize Whisper's native JSON into one independently addressable
+    // segment per JSONL line. The temporary native wrapper is not retained.
     const rawJsonPath = `${outputBase}.json`;
+    let segmentCount = 0;
     if (existsSync(rawJsonPath)) {
-        renameSync(rawJsonPath, jsonTelemetryPath);
-        recordSha256InJson(jsonTelemetryPath, sourceSha256);
-        console.log(`📊 Generated Machine JSON (Tier 3): ${jsonTelemetryPath}`);
+        const telemetry = JSON.parse(readFileSync(rawJsonPath, 'utf-8'));
+        const segments = normalizeWhisperSegments(telemetry, {
+            sourceSha256,
+            sourceFile: basename(absInput)
+        });
+        writeJsonl(segmentIndexPath, segments);
+        unlinkSync(rawJsonPath);
+        segmentCount = segments.length;
+        console.log(`Generated Segment Index (Tier 2): ${segmentIndexPath}`);
     }
 
-    // 7. Reconstruct prose for Tier 2 Markdown Manifest
+    // 7. Reconstruct prose for the human-readable Tier 2 Markdown record.
     const rawTxtPath = `${outputBase}.txt`;
     let rawText = '';
     if (existsSync(rawTxtPath)) {
@@ -284,48 +281,17 @@ export function transcribe(inputFile, targetDir = null, requestedDomain = null, 
     }
     const cleanBody = paragraphs.join('\n\n');
 
-    const cleanTitle = baseName.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    const cleanTitle = mediaTitle(baseName);
     const dateStr = localDateString();
 
-    let keyframeVisionSection = '';
-    if (isVideo && keyframeRelPath) {
-        const keyframeVisionJsonPath = join(archiveDir, `keyframe-${slug}-vision-telemetry.json`);
-        try {
-            if (dryRun) {
-                keyframeVisionSection = [
-                    '## Keyframe Vision Telemetry',
-                    '',
-                    `[Dry run: keyframe OCR/telemetry would be written to keyframe-${slug}-vision-telemetry.json]`,
-                    ''
-                ].join('\n');
-            } else {
-                const telemetry = runKeyframeVision(join(assetDir, keyframeRelPath), {
-                    domainName,
-                    jsonOutputPath: keyframeVisionJsonPath
-                });
-                keyframeVisionSection = formatKeyframeVisionSection(telemetry, {
-                    transcriptPath: finalMdPath,
-                    jsonOutputPath: keyframeVisionJsonPath,
-                    keyframeRelPath
-                });
-                console.log(`👁️ Generated Keyframe Vision (Tier 3): ${keyframeVisionJsonPath}`);
-            }
-        } catch (error) {
-            console.warn(`⚠️ Warning: Keyframe vision telemetry skipped: ${error.stack}`);
-            keyframeVisionSection = keyframeRelPath
-                ? `\n![Hero Keyframe](${keyframeRelPath})\n`
-                : '';
-        }
-    }
-
     const archiveLink = relative(dirname(finalMdPath), archivePath).split('\\').join('/');
-    const telemetryLink = relative(dirname(finalMdPath), jsonTelemetryPath).split('\\').join('/');
+    const segmentIndexLink = relative(dirname(finalMdPath), segmentIndexPath).split('\\').join('/');
     const mdContent = `---
 id: "${domainPrefix}:transcript-${slug}"
 parent: "${parentNode}"
 related: []
 title: "Transcript: ${cleanTitle}"
-description: "Full-text verbatim transcript of ${basename(absInput)}."
+description: "Local machine transcript of ${basename(absInput)} generated by Whisper."
 type: "transcript"
 domain: "${domainName}"
 exposure: "${domain.exposure}"
@@ -333,19 +299,24 @@ status: "active"
 created: ${dateStr}
 updated: ${dateStr}
 source_sha256: "${sourceSha256}"
-tags: ["${domainName}", "transcript", "assets", "${isVideo ? 'video' : 'audio'}"]
+tags: ["${domainName}", "transcript", "machine-transcript", "assets", "${isVideo ? 'video' : 'audio'}"]
 ---
 
 # Transcript: ${cleanTitle}
 
 **Source Media:** [${basename(archivePath)}](${archiveLink})
-**Raw JSON Telemetry (Tier 3):** [transcript-${slug}.json](${telemetryLink})
-**Media Type:** ${isVideo ? 'Video (.mp4)' : 'Audio (.m4a)'}
+**Timestamped Whisper Index (Tier 2):** [transcript-${slug}.segments.jsonl](${segmentIndexLink})
+**Media Type:** ${isVideo ? 'Video' : 'Audio'} (${ext})
+**Transcription Engine:** Local ${basename(whisperBin)}
+**Model:** ${DEFAULT_MODEL}
+**Indexed Segments:** ${segmentCount || 'Not available'}
 **Date Processed:** ${dateStr}
+
+> Machine-generated transcript. It may contain recognition errors; use the timestamped Whisper index for exact review.
 
 ---
 
-${keyframeVisionSection}${keyframeVisionSection ? '\n---\n\n' : ''}## Verbatim Dialogue
+## Machine Transcript
 
 ${cleanBody}
 `;
@@ -358,13 +329,12 @@ ${cleanBody}
     const absInputPosixFinal = absInput.split(sep).join('/');
     if (absInputPosixFinal.includes('/inbox/') && !absInputPosixFinal.includes('/inbox/archive/')) {
         renameSync(absInput, archivePath);
-        console.log(`📦 Archived source media:       ${archivePath}`);
+        console.log(`Archived source media: ${archivePath}`);
     }
 
-    console.log(`\n✅ Media Ingestion complete!`);
-    console.log(`📄 Generated Transcript (Tier 2): ${finalMdPath}`);
-    if (keyframeRelPath) console.log(`🖼️ Generated Keyframe (Tier 2):   ${join(assetDir, keyframeRelPath)}`);
-    return { ...plannedResult, keyframePath: keyframeRelPath ? join(assetDir, keyframeRelPath) : null };
+    console.log(`\n${ui.success('Media ingestion complete')}`);
+    console.log(`Generated Transcript (Tier 2): ${finalMdPath}`);
+    return { ...plannedResult, recordCount: segmentCount };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === __filename) {

@@ -27,15 +27,18 @@ export function collectEvidence(filePath, content, repoRoot) {
         if (!asset || seen.has(asset)) continue;
         seen.add(asset);
         const archives = [];
+        const artifacts = [];
         if (existsSync(target) && extname(target).toLowerCase() === '.md') {
             const assetContent = readFileSync(target, 'utf-8');
-            for (const archivePath of localMarkdownTargets(target, assetContent)) {
-                if (pathHasSegment(archivePath, 'inbox') && pathHasSegment(archivePath, 'archive')) {
-                    archives.push(posixRel(repoRoot, archivePath));
+            for (const linkedPath of localMarkdownTargets(target, assetContent)) {
+                if (pathHasSegment(linkedPath, 'inbox') && pathHasSegment(linkedPath, 'archive')) {
+                    archives.push(posixRel(repoRoot, linkedPath));
+                } else if (pathHasSegment(linkedPath, 'assets') && linkedPath !== target) {
+                    artifacts.push(posixRel(repoRoot, linkedPath));
                 }
             }
         }
-        evidence.push({ asset, archives });
+        evidence.push({ asset, artifacts, archives });
     }
     return evidence;
 }

@@ -5,7 +5,6 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import os from 'node:os';
 
-import { formatKeyframeVisionSection } from '../lib/vision.mjs';
 import {
     filenameFromTitle,
     validateFetchUrl,
@@ -71,27 +70,4 @@ test('fetch --json download discards progress instead of buffering it', () => {
     assert.deepEqual(human.extraArgs, []);
     assert.deepEqual(machine.stdio, ['ignore', 'ignore', 'pipe']);
     assert.deepEqual(machine.extraArgs, ['--no-progress', '--quiet']);
-});
-
-test('formatKeyframeVisionSection embeds OCR and scene telemetry in transcript body', () => {
-    const section = formatKeyframeVisionSection({
-        width: 1280,
-        height: 720,
-        aspectRatio: 'Horizontal Landscape',
-        averageLuminance: 0.512,
-        colorWarmth: 'Warm (Amber / Golden)',
-        lightingCategory: 'Direct Daylight / Clear Sky',
-        neuralTags: ['outdoor', 'lecture', 'text'],
-        ocrText: ['Slide Title', 'Chapter 1']
-    }, {
-        transcriptPath: '/repo/projects/assets/transcript-lecture.md',
-        jsonOutputPath: '/repo/projects/inbox/archive/keyframe-lecture-vision-telemetry.json',
-        keyframeRelPath: 'keyframe-lecture.jpg'
-    });
-
-    assert.match(section, /## Keyframe Vision Telemetry/);
-    assert.match(section, /Hero Keyframe/);
-    assert.match(section, /Neural Scene Tags/);
-    assert.match(section, /Slide Title/);
-    assert.match(section, /keyframe-lecture-vision-telemetry\.json/);
 });

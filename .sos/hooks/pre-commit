@@ -1,5 +1,17 @@
 #!/bin/sh
-node .sos/lib/format.mjs
-node .sos/lib/lint.mjs
-node .sos/lib/audit.mjs
-git add -- "$file"
+set -e
+cd "$(git rev-parse --show-toplevel)"
+export SOS_ROOT="$PWD"
+
+staged_list=$(mktemp)
+trap 'rm -f "$staged_list"' EXIT
+git diff --cached --name-only --diff-filter=ACMR > "$staged_list"
+
+node .sos/sos.mjs check
+
+while IFS= read -r path || [ -n "$path" ]; do
+    [ -n "$path" ] || continue
+    if [ -e "$path" ] || [ -h "$path" ]; then
+        git add -- "$path"
+    fi
+done < "$staged_list"

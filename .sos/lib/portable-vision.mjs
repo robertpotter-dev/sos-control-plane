@@ -5,8 +5,11 @@ import { fileURLToPath } from 'url';
 
 import { localDateString } from './debrief.mjs';
 import { parseFrontmatter } from './frontmatter.mjs';
+import { canonicalDomainNamespace } from './identity.mjs';
 import { decodeForVision, disposeDecoded } from './image-decode.mjs';
 import { readJpegExif } from './jpeg-exif.mjs';
+import { sha256File } from './hash.mjs';
+import { writeJsonl } from './jsonl.mjs';
 import { commandExists } from './tools.mjs';
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp', '.tiff', '.tif', '.dng', '.avif', '.gif']);
@@ -72,11 +75,12 @@ export function describeVisionEngine() {
 
 function domainMeta(repoRoot, domainName) {
     const spaceFile = join(repoRoot, domainName, 'SPACE.md');
-    if (!existsSync(spaceFile)) return { exposure: 'public', parent: `${domainName.slice(0, 4)}:charter` };
+    const namespace = canonicalDomainNamespace(domainName);
+    if (!existsSync(spaceFile)) return { exposure: 'public', parent: `${namespace}:charter` };
     const parsed = parseFrontmatter(readFileSync(spaceFile, 'utf-8'));
     return {
         exposure: parsed?.exposure || 'public',
-        parent: parsed?.id || `${domainName.slice(0, 4)}:charter`
+        parent: `${namespace}:charter`
     };
 }
 
@@ -117,24 +121,24 @@ function writeManifest({ results, manifestPath, telemetryPath, assetId, domainNa
         `id: "${assetId}"`,
         `parent: "${parent}"`,
         'related: []',
-        `title: "Asset Telemetry: Portable OCR and Photographic Extraction Ledger"`,
+        `title: "Image Telemetry: Portable OCR and Visual Extraction Ledger"`,
         `description: "Tier 2 machine extraction ledger: ${engine} across ${results.length} visual asset(s). This is not Apple Vision scene classification."`,
-        'type: "asset-manifest"',
+        'type: "image-telemetry"',
         `domain: "${domainName}"`,
         `exposure: "${exposure}"`,
         'status: "active"',
         `created: ${date}`,
         `updated: ${date}`,
-        `tags: ["${domainName}", "asset-manifest", "ocr", "telemetry", "verbatim-ledger"]`,
+        `tags: ["${domainName}", "image-telemetry", "ocr", "telemetry", "verbatim-ledger"]`,
         '---',
         '',
-        '# Asset Telemetry: Portable OCR and Photographic Extraction Ledger',
+        '# Image Telemetry: Portable OCR and Visual Extraction Ledger',
         '',
         '> Script-generated machine ledger. OCR and EXIF only. No neural scene tags. Synthesis belongs in Tier 1.',
         '',
         `**Extraction Engine:** ${engine}`,
         `**Dataset Scope:** ${results.length} visual asset(s)`,
-        `**Raw JSON Telemetry (Tier 3):** [${jsonName}](../inbox/archive/${jsonName})`,
+        `**Machine Vision Index (Tier 2):** [${jsonName}](${relative(dirname(manifestPath), telemetryPath).split('\\').join('/')})`,
         '',
         '## 1. Framing & Geometric Ratios',
         '',
@@ -173,15 +177,23 @@ export function runPortableVision({ targetPath, domainName, manifestPath, teleme
     if (!images.length) throw new Error(`No images found at ${targetPath}`);
 
     const engine = describeVisionEngine();
-    const results = images.map(imagePath => {
+    const results = images.map((imagePath, index) => {
         const item = analyzeImage(imagePath);
         item.relativePath = relative(targetPath, imagePath) || item.filename;
         if (images.length === 1) item.relativePath = item.filename;
-        return item;
+        const sourceSha256 = sha256File(imagePath);
+        return {
+            record_id: `vision:${sourceSha256.slice(0, 16)}:${String(index + 1).padStart(6, '0')}`,
+            source_file: item.filename,
+            source_sha256: sourceSha256,
+            observation_index: index,
+            index_line: index + 1,
+            ...item
+        };
     });
 
     mkdirSync(dirname(telemetryPath), { recursive: true });
-    writeFileSync(telemetryPath, `${JSON.stringify(results, null, 2)}\n`, 'utf-8');
+    writeJsonl(telemetryPath, results);
     const meta = domainMeta(repoRoot, domainName);
     writeManifest({
         results,
@@ -196,22 +208,11 @@ export function runPortableVision({ targetPath, domainName, manifestPath, teleme
     return results;
 }
 
-export function runPortableKeyframeVision(imagePath) {
-    const item = analyzeImage(imagePath);
-    return {
-        ...item,
-        averageLuminance: 0,
-        colorWarmth: null,
-        lightingCategory: null,
-        ocrText: item.ocrText || []
-    };
-}
-
 const isCli = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (isCli) {
     const [targetPath, domainName, manifestPath, telemetryPath, assetId] = process.argv.slice(2);
     if (!targetPath || !domainName || !manifestPath || !telemetryPath || !assetId) {
-        console.error('Usage: node portable-vision.mjs <target> <domain> <manifest.md> <telemetry.json> <id>');
+        console.error('Usage: node portable-vision.mjs <target> <domain> <manifest.md> <vision.jsonl> <id>');
         process.exit(1);
     }
     const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');

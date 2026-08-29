@@ -254,7 +254,7 @@ test('graph help documents the compact json payload', () => {
     assert.match(result.stdout, /--json\s+Compact machine payload: a resolved node, a tied candidate set, or graph stats\./);
 });
 
-test('graph reads a fresh version-3 index and does not write one on query', () => {
+test('graph reads a fresh version-4 index and does not write one on query', () => {
     const root = graphFixture();
     const writer = spawnSync(process.execPath, ['--input-type=module', '-e', `
         process.env.SOS_ROOT = ${JSON.stringify(root)};
@@ -268,7 +268,7 @@ test('graph reads a fresh version-3 index and does not write one on query', () =
     assert.equal(writer.status, 0, writer.stderr);
     const indexPath = join(root, '.sos', 'cache', 'graph-index.json');
     const index = JSON.parse(readFileSync(indexPath, 'utf-8'));
-    assert.equal(index.version, 3);
+    assert.equal(index.version, 4);
     assert.ok(Array.isArray(index.edges));
     const alpha = index.nodes.find(node => node.id === 'psn:alpha');
     assert.ok(alpha);

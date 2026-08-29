@@ -21,5 +21,5 @@ export function extractRtfText(sourcePath, slug = 'capture') {
     if (commandExists('unrtf')) {
         return runTool('unrtf', ['--text', sourcePath]).replace(/^[\s\S]*?-+\s*$/m, '').trim();
     }
-    throw new Error('RTF extraction needs textutil (macOS), pandoc, or unrtf. Install one of those, or use sos ingest --frontier.');
+    throw new Error('RTF extraction needs textutil (macOS), pandoc, or unrtf. The source remains in inbox; install one of those tools or provide a local sensor plugin, then ingest again.');
 }

@@ -35,12 +35,18 @@ function collectTierOneNodes(discoverDomains, repoRoot) {
 
 function collectTierTwoAssets(discoverDomains) {
     let count = 0;
-    for (const domain of discoverDomains()) {
-        const assetsDir = join(domain.path, 'assets');
-        if (!existsSync(assetsDir)) continue;
-        for (const name of readdirSync(assetsDir)) {
-            if (name.endsWith('.md')) count++;
+    function visit(dir) {
+        if (!existsSync(dir)) return;
+        for (const name of readdirSync(dir)) {
+            if (name.startsWith('.')) continue;
+            const child = join(dir, name);
+            const stat = statSync(child);
+            if (stat.isDirectory()) visit(child);
+            else count++;
         }
+    }
+    for (const domain of discoverDomains()) {
+        visit(join(domain.path, 'assets'));
     }
     return count;
 }

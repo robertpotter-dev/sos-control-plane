@@ -19,6 +19,7 @@ function instanceFixture() {
     writeFileSync(join(root, 'AGENTS.md'), '# old agents\n', 'utf-8');
     writeFileSync(join(root, 'DEBRIEF.md'), '# old debrief protocol\n', 'utf-8');
     writeFileSync(join(root, '.gitignore'), 'old\n', 'utf-8');
+    writeFileSync(join(root, 'README.md'), '# old readme\n', 'utf-8');
     writeFileSync(join(root, '.sos', 'sos.mjs'), '#!/usr/bin/env node\n', 'utf-8');
     return root;
 }
@@ -41,18 +42,21 @@ test('upgrade --dry-run overlays the control plane and preserves instance custod
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
     assert.equal(payload.dryRun, true);
-    assert.equal(payload.toVersion, '1.5.3');
+    assert.equal(payload.toVersion, '1.6.0');
     assert.equal(payload.fromVersion, '1.0.0');
     assert.ok(payload.copied.includes('AGENTS.md'));
     assert.ok(payload.copied.includes('DEBRIEF.md'));
     assert.ok(payload.copied.includes('.sos/lib/'));
+    assert.ok(payload.copied.includes('.sos/hooks/'));
     assert.deepEqual(payload.preserved, ['.sos/config.json', '.sos/operator-preferences.json']);
     assert.ok(payload.copied.includes('SETUP.md'));
+    assert.ok(payload.copied.includes('README.md'));
     assert.ok(payload.copied.includes('.sos/plugins/apple-metal/'));
     assert.ok(payload.copied.includes('.sos/plugins/linux/'));
     assert.ok(payload.copied.includes('.sos/plugins/windows/'));
     assert.equal(readFileSync(join(dest, 'AGENTS.md'), 'utf-8'), '# old agents\n');
     assert.equal(readFileSync(join(dest, 'DEBRIEF.md'), 'utf-8'), '# old debrief protocol\n');
+    assert.equal(readFileSync(join(dest, 'README.md'), 'utf-8'), '# old readme\n');
     assert.equal(readFileSync(join(dest, 'journal', 'SPACE.md'), 'utf-8'), '# keep me\n');
     assert.equal(JSON.parse(readFileSync(join(dest, '.sos', 'operator-preferences.json'), 'utf-8')).preferences[0], 'Keep this preference.');
 });
@@ -76,9 +80,10 @@ test('upgrade copies the control plane and keeps config, preferences, and notes'
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
     assert.equal(payload.dryRun, false);
-    assert.equal(JSON.parse(readFileSync(join(dest, 'package.json'), 'utf-8')).version, '1.5.3');
+    assert.equal(JSON.parse(readFileSync(join(dest, 'package.json'), 'utf-8')).version, '1.6.0');
     assert.match(readFileSync(join(dest, 'AGENTS.md'), 'utf-8'), /sos upgrade/);
     assert.match(readFileSync(join(dest, 'DEBRIEF.md'), 'utf-8'), /Conversational Debrief Protocol/);
+    assert.match(readFileSync(join(dest, 'README.md'), 'utf-8'), /Sovereign OS Control Plane/);
     assert.equal(JSON.parse(readFileSync(join(dest, '.sos', 'config.json'), 'utf-8')).systemName, 'Workbench Fixture');
     assert.equal(JSON.parse(readFileSync(join(dest, '.sos', 'operator-preferences.json'), 'utf-8')).preferences[0], 'Keep this preference.');
     assert.equal(readFileSync(join(dest, 'journal', 'SPACE.md'), 'utf-8'), '# keep me\n');
@@ -86,6 +91,8 @@ test('upgrade copies the control plane and keeps config, preferences, and notes'
     assert.equal(existsSync(join(dest, '.sos', 'plugins', 'apple-metal', 'vision.swift')), true);
     assert.equal(existsSync(join(dest, '.sos', 'plugins', 'linux', 'vision.sh')), true);
     assert.equal(existsSync(join(dest, '.sos', 'plugins', 'windows', 'ocr.ps1')), true);
+    assert.equal(existsSync(join(dest, '.sos', 'hooks', 'pre-commit')), true);
+    assert.equal(existsSync(join(dest, '.sos', 'hooks', 'post-commit')), true);
 });
 
 test('upgrade refuses to overlay a repository onto itself', () => {
@@ -142,6 +149,7 @@ test('sos help lists upgrade from the published zip or a local path', () => {
     });
     assert.equal(overview.status, 0, overview.stderr || overview.stdout);
     assert.match(overview.stdout, /sos upgrade/);
+    assert.match(overview.stdout, /sos trace/);
     assert.match(overview.stdout, /Sovereign OS/);
 
     const named = spawnSync(process.execPath, [join(SOURCE_ROOT, '.sos', 'sos.mjs'), 'help', 'upgrade'], {
@@ -151,6 +159,8 @@ test('sos help lists upgrade from the published zip or a local path', () => {
     });
     assert.equal(named.status, 0, named.stderr || named.stdout);
     assert.match(named.stdout, /sos upgrade/);
+    assert.match(named.stdout, /README.md/);
+    assert.match(named.stdout, /SENSOR-PROTOCOL/);
     assert.match(named.stdout, /published/);
     assert.match(named.stdout, /--path/);
     assert.doesNotMatch(named.stdout, /git clone/);

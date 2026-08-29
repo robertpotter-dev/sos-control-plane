@@ -11,10 +11,10 @@ let args = Array(CommandLine.arguments.dropFirst())
 guard let targetPath = args.first, !targetPath.hasPrefix("--") else {
     print("""
     ===============================================================
-    📸 Local Vision & EXIF Telemetry Engine
+    Local Vision and EXIF Telemetry Engine
     ===============================================================
     Usage:
-      swift .sos/lib/vision.swift <path-to-image-or-directory> [options]
+      swift .sos/plugins/apple-metal/vision.swift <path-to-image-or-directory> [options]
 
     Options:
       --ocr                  Run optical character recognition
@@ -27,12 +27,12 @@ guard let targetPath = args.first, !targetPath.hasPrefix("--") else {
       --force / --overwrite  Overwrite existing manifest/telemetry if collision detected
 
     Features:
-      • Automatic non-destructive collision prevention (auto-incrementing slugs)
-      • Dynamic domain and charter discovery from directory tree
-      • Camera EXIF/TIFF/GPS Metadata & Apple Maps navigation links
-      • Apple Neural Scene & Atmosphere Classification (VNClassifyImageRequest)
-      • Luminance & Color Warmth Analysis (CoreImage Area Average)
-      • High-Accuracy Optical Character Recognition with tag-safe escaping (\\#)
+      - Automatic non-destructive collision prevention (auto-incrementing slugs)
+      - Dynamic domain and charter discovery from directory tree
+      - Camera EXIF/TIFF/GPS Metadata and Apple Maps navigation links
+      - Apple Neural Scene and Atmosphere Classification (VNClassifyImageRequest)
+      - Luminance and Color Warmth Analysis (CoreImage Area Average)
+      - High-Accuracy Optical Character Recognition with tag-safe escaping (\\#)
     ===============================================================
     """)
     exit(0)
@@ -150,26 +150,25 @@ var resolvedMDPath = getArgValue("--output")
 var resolvedJSONPath = getArgValue("--output-json")
 
 if resolvedMDPath == nil && resolvedJSONPath == nil && !doJSON {
-    let candidateMD = "\(domainConfig.path)/assets/asset-\(slug)-photographic-telemetry.md"
+    let candidateMD = "\(domainConfig.path)/assets/image-telemetry-\(slug).md"
     
     // Collision detection on default path
     if fileManager.fileExists(atPath: candidateMD) && !isForce {
         var counter = 2
-        while fileManager.fileExists(atPath: "\(domainConfig.path)/assets/asset-\(slug)-\(counter)-photographic-telemetry.md") {
+        while fileManager.fileExists(atPath: "\(domainConfig.path)/assets/image-telemetry-\(slug)-\(counter).md") {
             counter += 1
         }
         slug = "\(slug)-\(counter)"
-        print("⚠️ [COLLISION PREVENTION] Existing asset manifest detected. Allocating safe slug: asset-\(slug)-photographic-telemetry.md")
+        print("COLLISION PREVENTION: existing image telemetry record detected. Allocating safe slug: image-telemetry-\(slug).md")
     }
-    resolvedMDPath = "\(domainConfig.path)/assets/asset-\(slug)-photographic-telemetry.md"
+    resolvedMDPath = "\(domainConfig.path)/assets/image-telemetry-\(slug).md"
 }
 
 if resolvedJSONPath == nil && resolvedMDPath != nil {
-    // Default JSON location in cold archive (directly under inbox/archive/)
-    resolvedJSONPath = "\(domainConfig.path)/inbox/archive/\(slug)-vision-telemetry.json"
+    resolvedJSONPath = "\(domainConfig.path)/assets/image-telemetry-\(slug).vision.jsonl"
 }
 
-let customId = getArgValue("--id") ?? "\(detectedPrefix):asset-\(slug)-photographic-telemetry"
+let customId = getArgValue("--id") ?? "\(detectedPrefix):image-telemetry-\(slug)"
 
 var imagePaths: [String] = []
 if isDir.boolValue {
@@ -410,10 +409,15 @@ if let outJsonPath = resolvedJSONPath {
     try? fileManager.createDirectory(atPath: jsonDir, withIntermediateDirectories: true, attributes: nil)
     
     let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    if let data = try? encoder.encode(allResults) {
-        try? data.write(to: URL(fileURLWithPath: outJsonPath))
-        print("📊 Generated Machine JSON (Tier 3): \(outJsonPath)")
+    encoder.outputFormatting = [.sortedKeys]
+    let jsonl = allResults.compactMap { result -> Data? in
+        guard var data = try? encoder.encode(result) else { return nil }
+        data.append(0x0A)
+        return data
+    }.reduce(Data(), +)
+    if !jsonl.isEmpty || allResults.isEmpty {
+        try? jsonl.write(to: URL(fileURLWithPath: outJsonPath))
+        print("Generated Machine JSONL (Tier 2): \(outJsonPath)")
     }
 }
 
@@ -431,7 +435,7 @@ if let outMDPath = resolvedMDPath {
     var jsonLink = "N/A"
     if let outJsonPath = resolvedJSONPath {
         let jsonName = (outJsonPath as NSString).lastPathComponent
-        jsonLink = "[\(jsonName)](../inbox/archive/\(jsonName))"
+        jsonLink = "[\(jsonName)](\(jsonName))"
     }
     
     var md = """
@@ -439,25 +443,25 @@ if let outMDPath = resolvedMDPath {
     id: "\(customId)"
     parent: "\(customParent)"
     related: []
-    title: "Asset Telemetry: Verbatim Computer Vision & Photographic Extraction Ledger (\(slug.capitalized))"
-    description: "Tier 2 machine extraction ledger: Apple Vision (VNClassifyImageRequest, VNRecognizeTextRequest) and CoreImage telemetry across \(totalCount) archival visual assets."
-    type: "asset-manifest"
+    title: "Image Telemetry: Verbatim Computer Vision Extraction Ledger (\(slug.capitalized))"
+    description: "Tier 2 machine extraction ledger: Apple Vision (VNClassifyImageRequest, VNRecognizeTextRequest) and CoreImage telemetry across \(totalCount) visual assets."
+    type: "image-telemetry"
     domain: "\(customDomain)"
     exposure: "\(domainConfig.exposure)"
     status: "active"
     created: \(dateStr)
     updated: \(dateStr)
-    tags: ["\(customDomain)", "asset-manifest", "apple-vision", "computer-vision", "telemetry", "verbatim-ledger"]
+    tags: ["\(customDomain)", "image-telemetry", "apple-vision", "computer-vision", "telemetry", "verbatim-ledger"]
     ---
 
-    # Asset Telemetry: Verbatim Computer Vision & Photographic Extraction Ledger
+    # Image Telemetry: Verbatim Computer Vision Extraction Ledger
 
     > [!NOTE] **Tier 2 Machine Data Ledger Invariant:**
-    > This document is a **100% unopinionated, script-generated machine ledger** produced locally by `.sos/lib/vision.swift` using Apple's hardware Neural Engine (`Vision.framework` & `CoreImage`). It contains raw telemetry, uneditorialized tag distributions, and verbatim OCR strings. All conceptual, artistic, or narrative synthesis is maintained separately in Tier 1 nodes.
+    > This document is a **100% unopinionated, script-generated machine ledger** produced locally by `.sos/plugins/apple-metal/vision.swift` using Apple's hardware Neural Engine (`Vision.framework` & `CoreImage`). It contains raw telemetry, uneditorialized tag distributions, and verbatim OCR strings. All conceptual, artistic, or narrative synthesis is maintained separately in Tier 1 nodes.
 
     **Extraction Engine:** Native macOS Apple Vision (`VNClassifyImageRequest`, `VNRecognizeTextRequest`) & `CoreImage` (`CIAreaAverage`)  
-    **Dataset Scope:** \(totalCount) Archival Media Assets  
-    **Raw JSON Telemetry (Tier 3):** \(jsonLink)  
+    **Dataset Scope:** \(totalCount) Visual Assets
+    **Machine JSONL Telemetry (Tier 2):** \(jsonLink)
 
     ---
 
@@ -564,7 +568,7 @@ if let outMDPath = resolvedMDPath {
     md += "\n"
     
     try? md.write(to: URL(fileURLWithPath: outMDPath), atomically: true, encoding: .utf8)
-    print("📄 Generated Manifest (Tier 2): \(outMDPath)")
+    print("Generated Manifest (Tier 2): \(outMDPath)")
 }
 
 // Standard stdout formatting

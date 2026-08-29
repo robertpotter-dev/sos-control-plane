@@ -68,12 +68,11 @@ export function resolvedMirrors(repoRoot) {
 }
 
 
-
 export function writeSystemConfig(repoRoot, { systemName, created, vaults = [], mirrors = [] }) {
     mkdirSync(join(repoRoot, '.sos'), { recursive: true });
     const path = join(repoRoot, SYSTEM_CONFIG_RELATIVE_PATH);
     const payload = { version: 1, systemName, created, vaults, mirrors };
-    
+
     writeFileSync(path, `${JSON.stringify(payload, null, 2)}\n`, { encoding: 'utf-8', flag: 'wx' });
     relocateLegacySystemConfig(repoRoot);
     return path;

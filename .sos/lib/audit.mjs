@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync } from 'fs';
-import { extname, join, relative } from 'path';
+import { createReadStream, existsSync, readFileSync } from 'fs';
+import { createInterface } from 'readline';
+import { dirname, extname, join, relative, resolve } from 'path';
 import { discoverDomains, REPO_ROOT, getAllMarkdownFiles } from './domains.mjs';
 import {
     domainNameForRelativePath,
@@ -32,7 +33,7 @@ function evidenceRows(node) {
 }
 
 function evidenceAudit(nodes) {
-    const result = { tierOneSources: 0, completeChains: 0, directDerivatives: 0, missingAssets: [], missingArchives: [], assetsWithoutArchive: [] };
+    const result = { tierOneSources: 0, tierTwoArtifacts: 0, completeChains: 0, directDerivatives: 0, missingAssets: [], missingArtifacts: [], missingArchives: [], assetsWithoutArchive: [] };
     for (const node of nodes.values()) {
         if ((node.tier ?? (pathIsTierOne(node.relPath) ? 1 : 2)) !== 1) continue;
         for (const item of evidenceRows(node)) {
@@ -46,12 +47,20 @@ function evidenceAudit(nodes) {
                 result.directDerivatives++;
                 continue;
             }
+            let intact = true;
+            for (const artifact of item.artifacts || []) {
+                result.tierTwoArtifacts++;
+                const artifactPath = join(REPO_ROOT, artifact);
+                if (!existsSync(artifactPath)) {
+                    intact = false;
+                    result.missingArtifacts.push({ node, assetPath, artifactPath });
+                }
+            }
             const archives = (item.archives || []).map(archive => join(REPO_ROOT, archive));
             if (archives.length === 0) {
                 result.assetsWithoutArchive.push({ node, assetPath });
                 continue;
             }
-            let intact = true;
             for (const archivePath of archives) {
                 if (!existsSync(archivePath)) {
                     intact = false;
@@ -64,7 +73,138 @@ function evidenceAudit(nodes) {
     return result;
 }
 
-function collectAudit() {
+function inventoryPath(record) {
+    return record?.source_inventory
+        ? resolve(dirname(record.filePath), record.source_inventory)
+        : null;
+}
+
+async function findInventoryHashes(path, wanted) {
+    const found = new Set();
+    try {
+        const input = createReadStream(path, { encoding: 'utf-8' });
+        const lines = createInterface({ input, crlfDelay: Infinity });
+        for await (const line of lines) {
+            if (!line.trim()) continue;
+            const row = JSON.parse(line);
+            if (typeof row?.source_sha256 === 'string' && wanted.has(row.source_sha256.toLowerCase())) {
+                found.add(row.source_sha256.toLowerCase());
+                if (found.size === wanted.size) {
+                    input.destroy();
+                    break;
+                }
+            }
+        }
+        return { found, error: null };
+    } catch (error) {
+        return { found, error };
+    }
+}
+
+async function frontierArtifactAudit(records) {
+    const missing = [];
+    const intakeTypes = new Set(['frontier-intake', 'frontier-batch-intake']);
+    const recordsById = new Map(records.filter(record => record.id).map(record => [record.id, record]));
+    const inventoryChecks = new Map();
+    for (const record of records) {
+        if (record.tier !== 2) continue;
+        if (intakeTypes.has(record.type)) {
+            const required = [
+                ['provenance', 'frontier-handoff'],
+                ['frontier_request']
+            ];
+            for (const [field, expected] of required) {
+                if (!record[field] || (expected && record[field] !== expected)) {
+                    missing.push({ file: record.relPath, id: record.id, field, expected });
+                }
+            }
+            const expectedName = record.type === 'frontier-batch-intake' ? 'frontier-batch-intake-*' : 'frontier-intake-*';
+            if (!record.relPath.split('/').at(-1).startsWith(expectedName.slice(0, -1))) {
+                missing.push({ file: record.relPath, id: record.id, field: 'filename', expected: expectedName });
+            }
+            if (record.related.length !== 0) {
+                missing.push({ file: record.relPath, id: record.id, field: 'related', expected: '[]' });
+            }
+            if (record.source_inventory && !existsSync(join(dirname(record.filePath), record.source_inventory))) {
+                missing.push({ file: record.relPath, id: record.id, field: 'source_inventory', expected: 'an existing batch inventory' });
+            }
+            continue;
+        }
+        if (!String(record.type || '').startsWith('frontier-')) continue;
+        const required = [
+            ['provenance', 'frontier-model'],
+            ['frontier_model'],
+            ['frontier_request'],
+            ['source_intake'],
+            ['source_coverage'],
+            ['uncertainty']
+        ];
+        for (const [field, expected] of required) {
+            if (!record[field] || (expected && record[field] !== expected)) {
+                missing.push({ file: record.relPath, id: record.id, field, expected });
+            }
+        }
+        if (!record.source_sha256 && !record.source_inventory) {
+            missing.push({ file: record.relPath, id: record.id, field: 'source_sha256 or source_inventory', expected: 'present' });
+        }
+        const intake = record.source_intake ? recordsById.get(record.source_intake) : null;
+        if (record.source_intake && (!intake || !intakeTypes.has(intake.type))) {
+            missing.push({ file: record.relPath, id: record.id, field: 'source_intake', expected: 'an existing frontier intake ID' });
+        }
+        if (record.source_inventory && !existsSync(join(dirname(record.filePath), record.source_inventory))) {
+            missing.push({ file: record.relPath, id: record.id, field: 'source_inventory', expected: 'an existing batch inventory' });
+        }
+        const expectedName = record.source_inventory ? 'frontier-batch-*' : 'frontier-*';
+        if (!record.relPath.split('/').at(-1).startsWith(expectedName.slice(0, -1))) {
+            missing.push({ file: record.relPath, id: record.id, field: 'filename', expected: expectedName });
+        }
+        if (record.related.length !== 0) {
+            missing.push({ file: record.relPath, id: record.id, field: 'related', expected: '[]' });
+        }
+        if (!intake) continue;
+
+        if (record.source_inventory) {
+            const declaredInventory = inventoryPath(record);
+            const intakeInventory = inventoryPath(intake);
+            if (!intakeInventory || declaredInventory !== intakeInventory) {
+                missing.push({ file: record.relPath, id: record.id, field: 'source_inventory', expected: 'the inventory declared by source_intake' });
+            } else if (record.source_sha256) {
+                const check = inventoryChecks.get(intakeInventory) || { hashes: new Map() };
+                const hash = record.source_sha256.toLowerCase();
+                const artifacts = check.hashes.get(hash) || [];
+                artifacts.push(record);
+                check.hashes.set(hash, artifacts);
+                inventoryChecks.set(intakeInventory, check);
+            }
+        } else if (record.source_sha256) {
+            if (!intake.source_sha256 || record.source_sha256 !== intake.source_sha256) {
+                missing.push({ file: record.relPath, id: record.id, field: 'source_sha256', expected: 'the hash declared by source_intake' });
+            }
+        }
+    }
+
+    for (const [path, check] of inventoryChecks) {
+        const wanted = new Set(check.hashes.keys());
+        const { found, error } = await findInventoryHashes(path, wanted);
+        if (error) {
+            for (const artifacts of check.hashes.values()) {
+                for (const artifact of artifacts) {
+                    missing.push({ file: artifact.relPath, id: artifact.id, field: 'source_inventory', expected: 'readable JSONL source inventory' });
+                }
+            }
+            continue;
+        }
+        for (const [hash, artifacts] of check.hashes) {
+            if (found.has(hash)) continue;
+            for (const artifact of artifacts) {
+                missing.push({ file: artifact.relPath, id: artifact.id, field: 'source_sha256', expected: 'a member of source_inventory' });
+            }
+        }
+    }
+    return missing;
+}
+
+async function collectAudit() {
     const domains = discoverDomains();
     const domainNames = domains.map(d => d.name);
     const domainTierMap = new Map(domains.map(d => [d.name, d.tier]));
@@ -202,9 +342,10 @@ function collectAudit() {
     }
 
     const evidence = evidenceAudit(nodeMap);
+    const frontierArtifacts = await frontierArtifactAudit(records);
     const operatorPreferences = validateOperatorPreferences(REPO_ROOT);
     const relatedEdges = tierOneNodes.reduce((acc, n) => acc + n.related.length, 0);
-    const hardFailures = duplicateIds.length + brokenParents.length + brokenRelated.length + invalidRelations.length + ifcViolations.length + evidence.missingAssets.length + evidence.missingArchives.length + operatorPreferences.errors.length;
+    const hardFailures = duplicateIds.length + brokenParents.length + brokenRelated.length + invalidRelations.length + ifcViolations.length + evidence.missingAssets.length + evidence.missingArtifacts.length + evidence.missingArchives.length + frontierArtifacts.length + operatorPreferences.errors.length;
     const warnings = orphanNodes.length + evidence.assetsWithoutArchive.length;
 
     return {
@@ -222,6 +363,7 @@ function collectAudit() {
         asymmetricEdges,
         domainCrossMatrix,
         evidence,
+        frontierArtifacts,
         operatorPreferences,
         relatedEdges,
         hardFailures,
@@ -232,7 +374,7 @@ function collectAudit() {
 function printAudit(report) {
     const {
         nodeMap, tierOneCount, assetCount, domains, domainNames, duplicateIds, brokenParents, brokenRelated, invalidRelations,
-        ifcViolations, orphanNodes, asymmetricEdges, domainCrossMatrix, evidence, operatorPreferences,
+        ifcViolations, orphanNodes, asymmetricEdges, domainCrossMatrix, evidence, frontierArtifacts, operatorPreferences,
         relatedEdges, hardFailures, warnings
     } = report;
 
@@ -313,15 +455,20 @@ function printAudit(report) {
 
     console.log(`\n${ui.heading('7. TIER 1 → TIER 2 → TIER 3 EVIDENCE LINEAGE:')}`);
     console.log(`   Tier 1 source links into Tier 2 assets: ${ui.heading(evidence.tierOneSources)}`);
-    if (evidence.missingAssets.length || evidence.missingArchives.length) {
+    if (evidence.tierTwoArtifacts > 0) console.log(`   Tier 2 manifest payloads: ${ui.heading(evidence.tierTwoArtifacts)}`);
+    if (evidence.missingAssets.length || evidence.missingArtifacts.length || evidence.missingArchives.length) {
         console.log(`   ${ui.error(`FAIL  Intact evidence chains: ${evidence.completeChains}`)}`);
     } else {
         console.log(`   ${ui.success(`OK  Complete evidence chains: ${evidence.completeChains}`)}`);
     }
-    if (evidence.directDerivatives > 0) console.log(`   ${ui.muted(`Direct Tier 2 derivatives (keyframes, certificates, or images): ${evidence.directDerivatives}`)}`);
+    if (evidence.directDerivatives > 0) console.log(`   ${ui.muted(`Direct Tier 2 derivatives (certificates or images): ${evidence.directDerivatives}`)}`);
     if (evidence.missingAssets.length > 0) {
         console.log(`   ${ui.error(`FAIL  Missing Tier 2 assets: ${evidence.missingAssets.length}`)}`);
         evidence.missingAssets.forEach(item => console.log(`      - ${ui.muted(item.node.relPath)} → ${ui.error(relative(REPO_ROOT, item.assetPath))}`));
+    }
+    if (evidence.missingArtifacts.length > 0) {
+        console.log(`   ${ui.error(`FAIL  Missing Tier 2 manifest payloads: ${evidence.missingArtifacts.length}`)}`);
+        evidence.missingArtifacts.forEach(item => console.log(`      - ${ui.muted(relative(REPO_ROOT, item.assetPath))} → ${ui.error(relative(REPO_ROOT, item.artifactPath))}`));
     }
     if (evidence.missingArchives.length > 0) {
         console.log(`   ${ui.error(`FAIL  Missing Tier 3 archives: ${evidence.missingArchives.length}`)}`);
@@ -332,7 +479,16 @@ function printAudit(report) {
         evidence.assetsWithoutArchive.forEach(item => console.log(`      - ${ui.muted(item.node.relPath)} → ${ui.warning(relative(REPO_ROOT, item.assetPath))}`));
     }
 
-    console.log(`\n${ui.heading('8. OPERATOR-PREFERENCE CONFIGURATION:')}`);
+    console.log(ui.heading('8. FRONTIER ARTIFACT CONTRACT:'));
+    if (frontierArtifacts.length === 0) {
+        console.log(`   ${ui.success('OK  Frontier handoffs and model artifacts satisfy their provenance contracts.')}\n`);
+    } else {
+        console.log(`   ${ui.error(`FAIL  ${frontierArtifacts.length} frontier artifact contract issue(s):`)}`);
+        frontierArtifacts.forEach(item => console.log(`      - ${ui.muted(item.file)} → ${ui.error(`${item.field} must be ${item.expected || 'present'}`)}`));
+        console.log('');
+    }
+
+    console.log(`\n${ui.heading('9. OPERATOR-PREFERENCE CONFIGURATION:')}`);
     if (!operatorPreferences.exists) {
         console.log(`   ${ui.success('OK  No operator-preference file; normal conversation behavior remains available.')}`);
     } else if (operatorPreferences.valid) {
@@ -369,10 +525,23 @@ function jsonAudit(report) {
             path: item.node.relPath,
             asset: relative(REPO_ROOT, item.assetPath)
         })),
+        ...report.evidence.missingArtifacts.map(item => ({
+            code: 'missing-artifact',
+            node: item.node.id,
+            asset: relative(REPO_ROOT, item.assetPath),
+            artifact: relative(REPO_ROOT, item.artifactPath)
+        })),
         ...report.evidence.missingArchives.map(item => ({
             code: 'missing-archive',
             asset: relative(REPO_ROOT, item.assetPath),
             archive: relative(REPO_ROOT, item.archivePath)
+        })),
+        ...report.frontierArtifacts.map(item => ({
+            code: 'frontier-contract',
+            id: item.id,
+            path: item.file,
+            field: item.field,
+            expected: item.expected || 'present'
         })),
         ...report.operatorPreferences.errors.map(error => ({ code: 'operator-preferences', error }))
     ];
@@ -401,13 +570,16 @@ function jsonAudit(report) {
             ifcViolations: report.ifcViolations.length,
             orphans: report.orphanNodes.length,
             missingAssets: report.evidence.missingAssets.length,
+            missingArtifacts: report.evidence.missingArtifacts.length,
             missingArchives: report.evidence.missingArchives.length,
             assetsWithoutArchive: report.evidence.assetsWithoutArchive.length,
             relatedEdges: report.relatedEdges,
             asymmetricEdges: report.asymmetricEdges.length,
             tierOneSources: report.evidence.tierOneSources,
+            tierTwoArtifacts: report.evidence.tierTwoArtifacts,
             evidenceChains: report.evidence.completeChains,
-            directDerivatives: report.evidence.directDerivatives
+            directDerivatives: report.evidence.directDerivatives,
+            frontierContractIssues: report.frontierArtifacts.length
         },
         crossDomain: report.domainCrossMatrix,
         operatorPreferences: {
@@ -419,12 +591,15 @@ function jsonAudit(report) {
     };
 }
 
-function main() {
+async function main() {
     const json = process.argv.slice(2).includes('--json');
-    const report = collectAudit();
+    const report = await collectAudit();
     if (json) console.log(JSON.stringify(jsonAudit(report), null, 2));
     else printAudit(report);
     if (report.hardFailures > 0) process.exitCode = 1;
 }
 
-main();
+main().catch(error => {
+    console.error(error.stack || error.message);
+    process.exitCode = 1;
+});

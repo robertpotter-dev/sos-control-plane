@@ -60,7 +60,14 @@ function emptyParsed(yaml, body) {
         tags: [],
         relations: [],
         related: [],
-        source_sha256: undefined
+        source_sha256: undefined,
+        provenance: undefined,
+        frontier_model: undefined,
+        frontier_request: undefined,
+        source_coverage: undefined,
+        uncertainty: undefined,
+        source_inventory: undefined,
+        source_intake: undefined
     };
 }
 
@@ -104,7 +111,14 @@ export function parseFrontmatter(content) {
         tags: tagList(data.tags),
         relations,
         related: relationIds(relations),
-        source_sha256: sourceSha ? sourceSha.toLowerCase() : undefined
+        source_sha256: sourceSha ? sourceSha.toLowerCase() : undefined,
+        provenance: scalarString(data.provenance),
+        frontier_model: scalarString(data.frontier_model),
+        frontier_request: scalarString(data.frontier_request),
+        source_coverage: scalarString(data.source_coverage),
+        uncertainty: scalarString(data.uncertainty),
+        source_inventory: scalarString(data.source_inventory),
+        source_intake: scalarString(data.source_intake)
     };
 }
 

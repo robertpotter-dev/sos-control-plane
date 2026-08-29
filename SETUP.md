@@ -1,6 +1,6 @@
 # Sovereign OS: Setup
 
-This folder is your system. Download it, live in it, and add domains. You do not need Git, a second clone, or a GitHub account.
+This unzipped folder is your **living instance**. Add domains and live here. You do not need Git, a second clone, or a GitHub account.
 
 A separate local copy is optional insurance, or a private place to develop the control plane. It is not required.
 
@@ -20,13 +20,13 @@ A separate local copy is optional insurance, or a private place to develop the c
 
 The kernel is the same on every OS. macOS runs `.sos/plugins/apple-metal` (Swift Vision and PDFKit) because that hardware is the best local fit. Linux and Windows use the portable Node sensors plus `.sos/plugins/linux` and `.sos/plugins/windows`.
 
-These binaries are not in the zip. Install them yourself:
+These binaries are not in the zip. `sos doctor` prints the copy-paste install command for this machine and does not run it.
 
-- macOS: Xcode CLT for Vision/PDFKit; `brew install whisper-cpp ffmpeg tesseract poppler yt-dlp` as needed
+- macOS: Xcode CLT for Vision/PDFKit; Homebrew for `whisper-cpp`, `ffmpeg`, `tesseract`, `poppler`, `yt-dlp` as needed
 - Linux: `ffmpeg`, `tesseract-ocr`, `poppler-utils`, `pandoc`; put `whisper-cli` on PATH
 - Windows: `ffmpeg`, `tesseract`, poppler; Windows OCR is a fallback, not Apple Vision
 
-Git is optional. Use it only if you want history of your notes.
+Git is optional. Use it only if you want history of your notes. Opt in to the bundled hooks with `git config core.hooksPath .sos/hooks` so pre-commit runs `sos check` and post-commit runs `sos sync --quick`.
 
 ## 2. Deploy
 
@@ -81,7 +81,7 @@ Mirrors are raw copies of the whole instance, written to `{mirror}/{folder-name}
 
 ## 5. Mobile capture
 
-1. Sync the vault parent (or each `{VaultName}` folder) with iCloud Drive, Dropbox, Syncthing, or any file sync tool.
+1. Sync the vault parent (or each `{VaultName}` folder) with any file sync tool you already use.
 2. Drop photos, voice memos, PDFs, and notes into `{VaultName}/inbox/` on the device.
 3. On the desktop: `node .sos/sos.mjs ingest`, then debrief in chat, then `node .sos/sos.mjs sync`.
 
@@ -102,7 +102,7 @@ From the living instance:
 node .sos/sos.mjs upgrade
 ```
 
-This downloads the published zip and overlays `.sos` tooling, `AGENTS.md`, `DEBRIEF.md`, `SETUP.md`, `package.json`, and `.gitignore`. It keeps `.sos/config.json`, `.sos/operator-preferences.json`, instance plugins that have `plugin.json`, and every domain note and inbox.
+This downloads the published zip and overlays `AGENTS.md`, `DEBRIEF.md`, `SETUP.md`, `README.md`, `package.json`, `.gitignore`, `.sos/sos.mjs`, `.sos/lib`, `.sos/test`, `.sos/vendor`, `.sos/hooks`, `.sos/plugins/SENSOR-PROTOCOL.md`, and the kernel sensor plugins (`apple-metal`, `linux`, `windows`). Instance plugins that have `plugin.json` stay in place. It keeps `.sos/config.json`, `.sos/operator-preferences.json`, and every domain note and inbox.
 
 If you keep a local source for insurance or development:
 

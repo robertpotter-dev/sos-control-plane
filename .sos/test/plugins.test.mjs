@@ -23,6 +23,7 @@ test('discoverPlugins registers commands from plugin.json manifests', () => {
             }
         }
     }, null, 2), 'utf-8');
+    writeFileSync(join(pluginDir, 'run.mjs'), 'export {};\n', 'utf-8');
 
     const { plugins, commands } = discoverPlugins(root);
     assert.equal(plugins.length, 1);
@@ -32,6 +33,57 @@ test('discoverPlugins registers commands from plugin.json manifests', () => {
     assert.match(appendPluginHelp('before\n\nOutput controls:', commands), /Plugins\n  sos sample/);
 });
 
+test('discoverPlugins registers sensor capabilities without requiring a command', () => {
+    const root = mkdtempSync(join(os.tmpdir(), 'sos-plugins-sensor-'));
+    const pluginDir = join(root, '.sos', 'plugins', 'history');
+    mkdirSync(pluginDir, { recursive: true });
+    writeFileSync(join(pluginDir, 'plugin.json'), JSON.stringify({
+        id: 'history',
+        version: '1.2.0',
+        sensors: {
+            events: {
+                script: 'sensor.mjs',
+                description: 'Parse a structured history export.',
+                extensions: ['.html'],
+                tags: ['structured-history', 'event-index'],
+                priority: 10
+            }
+        }
+    }, null, 2), 'utf-8');
+    writeFileSync(join(pluginDir, 'sensor.mjs'), 'export {};\n', 'utf-8');
+
+    const { plugins, commands, sensors } = discoverPlugins(root);
+    assert.equal(plugins.length, 1);
+    assert.equal(commands.size, 0);
+    assert.equal(sensors.length, 1);
+    assert.equal(sensors[0].sensorId, 'events');
+    assert.equal(sensors[0].pluginId, 'history');
+    assert.equal(sensors[0].pluginVersion, '1.2.0');
+    assert.deepEqual(sensors[0].extensions, ['.html']);
+});
+
+test('discoverPlugins rejects duplicate plugin ids', () => {
+    const root = mkdtempSync(join(os.tmpdir(), 'sos-plugins-dup-id-'));
+    for (const folder of ['alpha', 'beta']) {
+        const pluginDir = join(root, '.sos', 'plugins', folder);
+        mkdirSync(pluginDir, { recursive: true });
+        writeFileSync(join(pluginDir, 'plugin.json'), JSON.stringify({
+            id: 'clone',
+            version: '1.0.0',
+            sensors: {
+                events: {
+                    script: 'sensor.mjs',
+                    description: 'Fixture sensor.',
+                    extensions: ['.html']
+                }
+            }
+        }), 'utf-8');
+        writeFileSync(join(pluginDir, 'sensor.mjs'), 'export {};\n', 'utf-8');
+    }
+
+    assert.throws(() => discoverPlugins(root), /Duplicate plugin id "clone"/);
+});
+
 test('upgrade preserves instance plugins while overlaying the kernel', () => {
     const dest = mkdtempSync(join(os.tmpdir(), 'sos-plugins-upgrade-'));
     mkdirSync(join(dest, '.sos', 'lib'), { recursive: true });
@@ -39,7 +91,7 @@ test('upgrade preserves instance plugins while overlaying the kernel', () => {
     writeFileSync(join(dest, 'package.json'), '{"name":"instance","version":"1.0.0","type":"module"}\n', 'utf-8');
     writeFileSync(join(dest, '.sos', 'lib', 'domains.mjs'), 'export const REPO_ROOT = "fixture";\n', 'utf-8');
     writeFileSync(join(dest, '.sos', 'config.json'), '{"version":1}\n', 'utf-8');
-    writeFileSync(join(dest, '.sos', 'plugins', 'ninja-tickets', 'plugin.json'), '{"id":"ninja-tickets","commands":{}}\n', 'utf-8');
+    writeFileSync(join(dest, '.sos', 'plugins', 'ninja-tickets', 'plugin.json'), '{"id":"ninja-tickets","commands":{"ninja":{"script":"analyze.mjs","help":"sos ninja\\n\\nRun Ninja."}}}\n', 'utf-8');
     writeFileSync(join(dest, '.sos', 'plugins', 'ninja-tickets', 'analyze.mjs'), 'export {}\n', 'utf-8');
 
     const result = spawnSync(process.execPath, [
@@ -58,5 +110,5 @@ test('upgrade preserves instance plugins while overlaying the kernel', () => {
     const payload = JSON.parse(result.stdout);
     assert.deepEqual(payload.preserved, ['.sos/config.json', '.sos/operator-preferences.json']);
     assert.equal(readFileSync(join(dest, '.sos', 'plugins', 'ninja-tickets', 'analyze.mjs'), 'utf-8'), 'export {}\n');
-    assert.equal(readFileSync(join(dest, '.sos', 'plugins', 'ninja-tickets', 'plugin.json'), 'utf-8'), '{"id":"ninja-tickets","commands":{}}\n');
+    assert.match(readFileSync(join(dest, '.sos', 'plugins', 'ninja-tickets', 'plugin.json'), 'utf-8'), /ninja-tickets/);
 });

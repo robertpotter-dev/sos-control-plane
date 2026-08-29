@@ -8,7 +8,7 @@ import { pathIsTierOne } from './frontmatter.mjs';
 import { edgesFromRecords, scanRecords } from './records.mjs';
 import { ui } from './terminal.mjs';
 
-export const GRAPH_INDEX_VERSION = 3;
+export const GRAPH_INDEX_VERSION = 4;
 
 function graphIndexPath() {
     return join(REPO_ROOT, '.sos', 'cache', 'graph-index.json');
@@ -329,7 +329,7 @@ function serializeNode(target, nodeMap, deep) {
             const relation = source.relations.find(item => item.id === target.id);
             return edgeRef(source.id, relation?.predicate, source);
         }).filter(Boolean),
-        evidence: target.evidencePaths || []
+        evidence: target.evidence || []
     };
     if (deep) {
         payload.indirectEvidence = (target.backlinks || [])
@@ -542,9 +542,13 @@ function printNode(target, nodeMap, isDeep) {
         console.log(ui.muted('  - [ No inbound backlinks — leaf node ]'));
     }
 
-    console.log(`\n${ui.heading('◉ EVIDENCE PATHS (Tier 1 → Tier 2)')}`);
-    if (target.evidencePaths?.length > 0) {
-        for (const evidencePath of target.evidencePaths) console.log(`  - ${ui.muted(evidencePath)}`);
+    console.log(`\n${ui.heading('◉ EVIDENCE ROUTES (Tier 1 → Tier 2 → Tier 3)')}`);
+    if (target.evidence?.length > 0) {
+        for (const route of target.evidence) {
+            console.log(`  - ${ui.muted(route.asset)}`);
+            for (const artifact of route.artifacts || []) console.log(`    ├─ Tier 2 payload: ${ui.muted(artifact)}`);
+            for (const archive of route.archives || []) console.log(`    └─ Tier 3 source: ${ui.muted(archive)}`);
+        }
     } else {
         console.log(ui.muted('  - [ No direct Tier 2 sources ]'));
     }

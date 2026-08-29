@@ -10,6 +10,9 @@ import {
     RETIRED_FRONTMATTER_KEYS
 } from './frontmatter.mjs';
 import { validateRelations } from './relations.mjs';
+import { ui } from './terminal.mjs';
+
+const SKIP_DIRS = new Set(['inbox', 'assets', 'cache', 'runtime', 'vendor']);
 
 function getAllFiles(dir, ext = '.md') {
     let results = [];
@@ -20,7 +23,7 @@ function getAllFiles(dir, ext = '.md') {
         const fullPath = join(dir, file);
         const stat = statSync(fullPath);
         if (stat.isDirectory()) {
-            if (file === 'inbox' || file === 'assets') continue;
+            if (SKIP_DIRS.has(file)) continue;
             results = results.concat(getAllFiles(fullPath, ext));
         } else if (file.endsWith(ext)) {
             results.push(fullPath);
@@ -160,19 +163,29 @@ function lintCodeFile(filePath) {
     return { file: relPath, errors, warnings };
 }
 
+function reportFile(res) {
+    if (res.errors.length > 0) {
+        console.log(`\n${ui.error('FAIL')} ${res.file}`);
+        res.errors.forEach(e => console.log(`  ${ui.muted(e)}`));
+    }
+    if (res.warnings.length > 0) {
+        if (res.errors.length === 0) console.log(`\n${ui.warning('WARN')} ${res.file}`);
+        res.warnings.forEach(w => console.log(`  ${ui.muted(w)}`));
+    }
+}
+
 function runLinter() {
     const args = process.argv.slice(2);
     const checkMd = !args.includes('--code');
     const checkCode = !args.includes('--md');
 
-    console.log('🔍 Running Knowledge Graph Linter...\n');
+    console.log(`${ui.option('RUN')}  ${ui.heading('Lint')}`);
 
     let totalErrors = 0;
     let totalWarnings = 0;
     let checkedFilesCount = 0;
 
     if (checkMd) {
-        console.log('📄 Validating Markdown Schema & Link Integrity...');
         const domains = discoverDomains();
         const mdFiles = [];
         for (const d of domains) {
@@ -183,54 +196,31 @@ function runLinter() {
         for (const mf of mdFiles) {
             checkedFilesCount++;
             const res = lintMarkdownFile(mf, domains);
-            if (res.errors.length > 0 || res.warnings.length > 0) {
-                if (res.errors.length > 0) {
-                    console.log(`\n❌ [ERROR] ${res.file}`);
-                    res.errors.forEach(e => console.log(`   • ${e}`));
-                    totalErrors += res.errors.length;
-                }
-                if (res.warnings.length > 0) {
-                    if (res.errors.length === 0) console.log(`\n⚠️  [WARN]  ${res.file}`);
-                    res.warnings.forEach(w => console.log(`   • ${w}`));
-                    totalWarnings += res.warnings.length;
-                }
-            }
+            reportFile(res);
+            totalErrors += res.errors.length;
+            totalWarnings += res.warnings.length;
         }
     }
 
     if (checkCode) {
-        console.log('\n⚙️  Validating Systems Scripts (.sos/**/*.mjs)...');
         const codeFiles = getAllFiles(join(REPO_ROOT, '.sos'), '.mjs');
 
         for (const cf of codeFiles) {
             checkedFilesCount++;
             const res = lintCodeFile(cf);
-            if (res.errors.length > 0 || res.warnings.length > 0) {
-                if (res.errors.length > 0) {
-                    console.log(`\n❌ [ERROR] ${res.file}`);
-                    res.errors.forEach(e => console.log(`   • ${e}`));
-                    totalErrors += res.errors.length;
-                }
-                if (res.warnings.length > 0) {
-                    if (res.errors.length === 0) console.log(`\n⚠️  [WARN]  ${res.file}`);
-                    res.warnings.forEach(w => console.log(`   • ${w}`));
-                    totalWarnings += res.warnings.length;
-                }
-            }
+            reportFile(res);
+            totalErrors += res.errors.length;
+            totalWarnings += res.warnings.length;
         }
     }
 
-    console.log('\n═══════════════════════════════════════════════════════════════');
-    console.log(`LINT SUMMARY: Scanned ${checkedFilesCount} files.`);
     if (totalErrors === 0 && totalWarnings === 0) {
-        console.log('✅ ALL CHECKS PASSED: 0 errors, 0 warnings. Clean system state!');
-        console.log('═══════════════════════════════════════════════════════════════\n');
+        console.log(`${ui.success('PASS')} Lint ${ui.muted(`${checkedFilesCount} files`)}`);
         process.exit(0);
-    } else {
-        console.log(`Results: ${totalErrors} error(s), ${totalWarnings} warning(s).`);
-        console.log('═══════════════════════════════════════════════════════════════\n');
-        if (totalErrors > 0) process.exit(1);
     }
+
+    console.log(`${totalErrors > 0 ? ui.error('FAIL') : ui.warning('WARN')} Lint ${ui.muted(`${totalErrors} error(s), ${totalWarnings} warning(s), ${checkedFilesCount} files`)}`);
+    if (totalErrors > 0) process.exit(1);
 }
 
 runLinter();

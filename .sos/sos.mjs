@@ -49,6 +49,7 @@ Commands
   sos ingest          Run the local sensor pipeline and create deterministic debrief records.
   sos fetch           Download remote video/audio into a domain inbox for ingest.
   sos graph           Search the active knowledge graph and evidence links.
+  sos trace           Follow evidence linked from one exact Tier 1 node.
   sos audit           Validate graph, IFC, evidence lineage, and operator preferences.
   sos check           Run the complete local validation pipeline.
   sos sync            Validate, compile, and synchronize configured targets.
@@ -61,6 +62,7 @@ Details
   sos help ingest     Local extraction and batch selection.
   sos help fetch      Remote URL acquisition into a domain inbox.
   sos help graph      Canonical IDs, note paths, keywords, and --deep.
+  sos help trace      Evidence from an exact Tier 1 node.
   sos help sync       Synchronization targets and preview mode.
   sos help upgrade    Download the published zip, or overlay from --path.
   sos help config     List, add, or remove system configurations.
@@ -117,9 +119,12 @@ Examples:
 
 Options: --json, --quiet, --verbose`,
 
-    ingest: `sos ingest ["path or keywords"] [--frontier] [--dry-run]
+    ingest: `sos ingest ["path or keywords"] [--dry-run]
+    sos ingest <exact-path-or-batch> --frontier --request "analysis intent" [--dry-run]
 
-Process pending inbox captures with deterministic local tools. Audio and video use local Whisper. Images use Apple Vision on macOS, or Tesseract / Windows OCR elsewhere (not Apple Vision scene tags). Text, RTF, PDFs, CSV, and XLSX are preserved as verbatim Tier 2 captures. Empty OCR is still a successful photo ingest. Every loose file creates one deterministic debrief record. Every top-level inbox folder is processed as one batch and creates one shared record. After the batch is archived, the empty source folder is removed.
+Process pending inbox captures with local sensors. Audio and video use local Whisper. Images use Apple Vision on macOS, or Tesseract / Windows OCR elsewhere (not Apple Vision scene tags). Text, RTF, PDFs, CSV, and XLSX are preserved as mechanical Tier 2 captures. Source-specific sensor plugins can normalize additional formats. Empty OCR is still a successful photo ingest. A debrief record is created only after a complete T2 manifest exists. Every loose file creates one record; every top-level inbox folder creates one shared batch record.
+
+Frontier escalation is explicit. It archives the selected raw source and writes a frontier-intake-* handoff for one capture or a frontier-batch-intake-* handoff for a folder batch, containing your request, source hashes, and the local baseline that was available. The conversational model then creates a purpose-named frontier-* or frontier-batch-* sibling artifact; it must identify its model, source coverage, and uncertainty. Use --frontier only after declining the local baseline.
 
 Selection
   Exact path          One pending inbox file or top-level folder batch.
@@ -127,14 +132,17 @@ Selection
   Ambiguous match     Sovereign OS stops and shows the candidates.
 
 Options
-  --frontier          Bypass local extraction. Archive natively and create a Frontier Debrief for an agent to natively parse.
-  --dry-run           Preview extraction, archival, and the debrief record without writing.
-  --json              Compact machine payload: intake units, debrief paths, and failures. No banners.
+  --frontier          Create an explicit frontier handoff instead of running the local sensor.
+  --request <text>    Required with --frontier; preserve the operator's analysis intent.
+  --dry-run           Preview extraction, archival, and the debrief record without writing. With --frontier --json, emits a factual capture plan.
+  --json              Compact machine payload: intake units, manifest/debrief paths, failures, and frontier plans. No banners.
 
 Examples:
   sos ingest
   sos ingest "voice memo"
-  sos ingest "phone directory" --frontier
+  sos ingest "journal/inbox/rough-mix.wav" --frontier --request "Analyze this as a song: arrangement, performance, and mix."
+  sos ingest "journal/inbox/album-sketches" --frontier --request "Analyze this as an album project." --dry-run --json
+  sos ingest "phone directory"
   sos ingest "personal/inbox/voice-memo.m4a" --dry-run
   sos ingest "site visit" --dry-run --json
 
@@ -191,6 +199,12 @@ Examples:
 
 Output controls: --json, --quiet, --verbose`,
 
+    trace: `sos trace <t1-id-or-path> [evidence keywords] [--since ISO] [--until ISO] [--source] [--limit N]
+
+Follow evidence only from an exact Tier 1 grounding node. With no filters, list its T2 records, payloads, and T3 sources. Keywords search linked JSONL indexes without widening into unrelated assets. --since is inclusive and --until is exclusive; both filter the standardized occurred_at field and accept YYYY-MM-DD or an ISO 8601 timestamp with timezone. --source adds the exact Tier 3 source excerpt when record locators are available.
+
+Options: --since ISO, --until ISO, --source, --limit N, --json, --quiet, --verbose`,
+
     audit: `sos audit
 
 Validate Markdown metadata, canonical IDs, graph links, semantic predicates, information-flow boundaries, Tier 1 → Tier 2 → Tier 3 evidence chains, and operator-preference configuration.
@@ -225,7 +239,7 @@ Options: --quick, --vaults, --mirrors, --all, --rebuild, --force, --dry-run, --j
 
     upgrade: `sos upgrade [--path <dir>] [--dry-run]
 
-Overlay the published control plane onto this living instance. Downloads the main-branch zip without using Git. Copies .sos tooling, AGENTS.md, DEBRIEF.md, SETUP.md, package.json, .gitignore, and kernel sensor plugins. Keeps .sos/config.json, operator preferences, instance plugins that have plugin.json, domain notes, and inboxes.
+Overlay the published control plane onto this living instance. Downloads the main-branch zip without using Git. Copies AGENTS.md, DEBRIEF.md, SETUP.md, README.md, package.json, .gitignore, .sos/sos.mjs, .sos/lib, .sos/test, .sos/vendor, .sos/hooks, .sos/plugins/SENSOR-PROTOCOL.md, and the kernel sensor plugins (apple-metal, linux, windows). Instance plugins that have plugin.json stay in place. Keeps .sos/config.json, operator preferences, domain notes, and inboxes.
 
 --path overlays from a local insurance or development copy instead of downloading.
 
@@ -239,6 +253,10 @@ Options: --path, --dry-run, --json, --quiet, --verbose`,
     doctor: `sos doctor
 
 Check the local operating environment: repository discovery, domain charters, configured vault targets, and optional local extraction tools.
+
+Missing tools print a copy-paste install command for this OS. Doctor does not install anything.
+
+--json includes packageManager, per-check install text, and a combined install list.
 
 Options: --json, --quiet, --verbose`,
 
@@ -495,16 +513,26 @@ async function main() {
         const isFrontier = frontierIndex !== -1;
         if (isFrontier) args.splice(frontierIndex, 1);
 
+        const requestIndex = args.indexOf('--request');
+        let request = null;
+        if (requestIndex !== -1) {
+            request = args[requestIndex + 1];
+            if (!request || request.startsWith('--')) return fail('ingest --request requires a non-empty value.', options);
+            args.splice(requestIndex, 2);
+        }
+        if (request && !isFrontier) return fail('ingest --request is only valid with --frontier.', options);
+
         const forwarded = singleSelector(args, command, options);
         if (!forwarded) return;
 
-        if (isFrontier) forwarded.push('--frontier');
+        if (isFrontier) forwarded.push('--frontier', '--request', request || '');
         return runDelegated(command, 'ingest.mjs', forwarded, options, { supportsDryRun: true, nativeJson: true });
     }
     if (command === 'fetch') {
         return runDelegated(command, 'fetch.mjs', args, options, { supportsDryRun: true, nativeJson: true });
     }
     if (command === 'graph') return runDelegated(command, 'graph.mjs', args, options, { nativeJson: true });
+    if (command === 'trace') return runDelegated(command, 'trace.mjs', args, options, { nativeJson: true });
     if (command === 'audit') return runDelegated(command, 'audit.mjs', args, options, { nativeJson: true });
     if (command === 'check') return runDelegated(command, 'pipeline.mjs', args, options, { nativeJson: true });
     if (command === 'sync') return runDelegated(command, 'sync.mjs', args, options, { supportsDryRun: true, nativeJson: true });

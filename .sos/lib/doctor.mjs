@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
 import { fail } from './cli.mjs';
+import { attachInstallHints, detectPackageManager } from './doctor-install.mjs';
 import { resolvedVaults } from './system-config.mjs';
 import { ui } from './terminal.mjs';
 import { firstCommand, heicDecoderCandidates } from './tools.mjs';
@@ -107,18 +108,37 @@ export function doctorCommand(args, options, ctx) {
     const requiredFailures = checks.filter(check => check.required && !check.ok);
     const warnings = checks.filter(check => !check.required && !check.ok);
     const notes = sensorNotes(isMac);
-    const result = { ok: requiredFailures.length === 0, requiredFailures: requiredFailures.length, warnings: warnings.length, checks, notes };
+    const manager = detectPackageManager();
+    const hinted = attachInstallHints(checks, { manager });
+    const result = {
+        ok: requiredFailures.length === 0,
+        requiredFailures: requiredFailures.length,
+        warnings: warnings.length,
+        checks: hinted.checks,
+        notes,
+        packageManager: hinted.packageManager,
+        install: hinted.install
+    };
 
     if (options.json) console.log(JSON.stringify(result, null, 2));
     else if (!options.quiet) {
         console.log(ui.accent('Sovereign OS doctor'));
-        for (const check of checks) {
+        for (const check of hinted.checks) {
             const marker = check.ok ? 'OK' : check.required ? 'FAIL' : 'WARN';
             const color = check.ok ? ui.success : check.required ? ui.error : ui.warning;
             console.log(`  ${color(marker.padEnd(4))} ${check.name}: ${ui.muted(check.detail)}`);
+            if (!check.ok && check.install) console.log(`        ${ui.muted(check.install)}`);
         }
         console.log(`\n${ui.accent('Sensor notes')}`);
         for (const note of notes) console.log(`  ${ui.muted(note)}`);
+        if (hinted.install.length) {
+            console.log(`\n${ui.accent('Install missing tools')}`);
+            console.log(`  ${ui.muted('Copy and run. Doctor does not install.')}`);
+            for (const command of hinted.install) console.log(`  ${command}`);
+        } else if (warnings.length && manager.hint) {
+            console.log(`\n${ui.accent('Install missing tools')}`);
+            console.log(`  ${ui.muted(manager.hint)}`);
+        }
         const summary = `${result.ok ? 'Core control plane is ready.' : 'Core control plane has required failures.'}${warnings.length ? ` ${warnings.length} optional capability warning(s).` : ''}`;
         console.log(`\n${result.ok ? ui.success(summary) : ui.error(summary)}`);
     }

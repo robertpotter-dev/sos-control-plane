@@ -6,29 +6,51 @@ import { fileURLToPath } from 'url';
 
 import { writeDebriefRecord, isDebriefRecord, localDateString, slugify } from './debrief.mjs';
 import { discoverDomains, REPO_ROOT } from './domains.mjs';
+import { readControlPlaneVersion } from './control-plane.mjs';
 import { parseFrontmatter } from './frontmatter.mjs';
 import { allocateDuplicateArchivePath, archiveMatchesSource, findAssetBySourceSha256, readSourceSha256, sha256File } from './hash.mjs';
 import { classifyInboxFile, collectInboxBatchFiles, inboxDirectories } from './inbox-scan.mjs';
+import { discoverPlugins } from './plugins.mjs';
+import { frontierSummary, localBaselineAdvice } from './frontier-intake.mjs';
+import { extractWithSensor, selectSensor } from './sensor-plugins.mjs';
 import { extractSpreadsheet, renderSpreadsheetMarkdown } from './spreadsheet.mjs';
+import { writeT2Record } from './t2-record.mjs';
 import { transcribe } from './transcribe.mjs';
 import { extractPdfText, executeVision } from './sensors.mjs';
 import { ui } from './terminal.mjs';
 import { extractRtfText } from './rtf.mjs';
 
 const LIB_DIR = dirname(fileURLToPath(import.meta.url));
+const BUILTIN_SENSOR_VERSION = readControlPlaneVersion(REPO_ROOT) || '0.0.0';
 
 function parseArguments() {
     const args = process.argv.slice(2);
-    const json = args.includes('--json');
-    const dryRun = args.includes('--dry-run');
-    const frontier = args.includes('--frontier');
-    const legacy = args.filter(arg => ['--ai', '--llm', '--handoff'].includes(arg));
-    if (legacy.length) throw new Error(legacy.join(', ') + ' is no longer a terminal ingestion mode. Run local sos ingest, then debrief with the AI chat of your choice.');
-    const unknown = args.filter(arg => arg.startsWith('--') && arg !== '--dry-run' && arg !== '--json' && arg !== '--frontier');
-    if (unknown.length) throw new Error('Unknown option: ' + unknown.join(', '));
-    const selectors = args.filter(arg => !arg.startsWith('--'));
+    let json = false;
+    let dryRun = false;
+    let frontier = false;
+    let request = null;
+    const selectors = [];
+    for (let index = 0; index < args.length; index++) {
+        const arg = args[index];
+        if (arg === '--json') json = true;
+        else if (arg === '--dry-run') dryRun = true;
+        else if (arg === '--frontier') frontier = true;
+        else if (arg === '--request') {
+            request = args[++index];
+            if (!request || request.startsWith('--')) throw new Error('--request requires a non-empty operator request.');
+        } else if (['--ai', '--llm', '--handoff'].includes(arg)) {
+            throw new Error(arg + ' is no longer a terminal ingestion mode. Use --frontier with an explicit --request when the local baseline is not the right fit.');
+        } else if (arg.startsWith('--')) {
+            throw new Error('Unknown option: ' + arg);
+        } else {
+            selectors.push(arg);
+        }
+    }
     if (selectors.length > 1) throw new Error('Expected one inbox selector, received: ' + selectors.join(', '));
-    return { selector: selectors[0] || null, dryRun, json, frontier };
+    if (request && !frontier) throw new Error('--request is only valid with --frontier.');
+    if (frontier && !selectors.length) throw new Error('--frontier requires one exact inbox capture or folder batch selector.');
+    if (frontier && !request) throw new Error('--frontier requires --request so the frontier analysis intent is preserved in the Tier 2 contract.');
+    return { selector: selectors[0] || null, dryRun, json, frontier, request };
 }
 
 function classify(path) {
@@ -36,15 +58,7 @@ function classify(path) {
 }
 
 function collectBatchFiles(root) {
-    try {
-        return collectInboxBatchFiles(root, root, { strict: true });
-    } catch (error) {
-        if (error.stack.startsWith('Unsupported file in batch ')) {
-            const filePath = error.stack.slice('Unsupported file in batch '.length);
-            throw new Error('Unsupported file in batch ' + relative(REPO_ROOT, root) + ': ' + filePath);
-        }
-        throw error;
-    }
+    return collectInboxBatchFiles(root, root, { strict: false });
 }
 
 function scanInboxWork() {
@@ -59,8 +73,8 @@ function scanInboxWork() {
                     debriefs.push({ ...inbox, path, name });
                     continue;
                 }
-                const type = classify(path);
-                if (type) work.push({ ...inbox, kind: 'single', label: basename(name, extname(name)), inboxPath: path, files: [{ path, file: name, relativePath: name, type }] });
+                const type = classify(path) || 'unsupported';
+                work.push({ ...inbox, kind: 'single', label: basename(name, extname(name)), inboxPath: path, files: [{ path, file: name, relativePath: name, type }] });
             } else {
                 const files = collectBatchFiles(path);
                 if (files.length) work.push({ ...inbox, kind: 'batch', label: name, inboxPath: path, files });
@@ -164,8 +178,21 @@ function removeEmptyBatchSource(item, dryRun) {
     rmdirEmptyTree(source);
 }
 
+function rollbackFailedBatch(item, rows, batchDirectory, dryRun) {
+    if (dryRun || item.kind !== 'batch') return;
+    for (const path of new Set(rows.flatMap(row => row.generatedArtifacts || []))) {
+        if (existsSync(path)) unlinkSync(path);
+    }
+    for (const row of rows) {
+        if (!row.archivePath || !existsSync(row.archivePath) || existsSync(row.sourcePath)) continue;
+        mkdirSync(dirname(row.sourcePath), { recursive: true });
+        renameSync(row.archivePath, row.sourcePath);
+    }
+    rmdirEmptyTree(batchDirectory);
+}
+
 function charterId(domain) {
-    return parseFrontmatter(readFileSync(domain.spaceFile, 'utf-8'))?.id || domain.prefix + ':charter';
+    return domain.prefix + ':charter';
 }
 
 function allocateAssetPath(domain, prefix, label) {
@@ -179,7 +206,7 @@ function allocateAssetPath(domain, prefix, label) {
     return { path, slug };
 }
 
-function writeTextAsset(domain, source, archivePath, dryRun) {
+function writeTextAsset(domain, source, archivePath, dryRun, sourceSha256 = '') {
     const allocation = allocateAssetPath(domain, 'text', basename(source.file, extname(source.file)));
     let text = '';
     if (!dryRun && extname(source.file).toLowerCase() === '.rtf') {
@@ -202,6 +229,7 @@ function writeTextAsset(domain, source, archivePath, dryRun) {
         'status: "active"',
         'created: ' + localDateString(),
         'updated: ' + localDateString(),
+        ...(sourceSha256 ? ['source_sha256: "' + sourceSha256 + '"'] : []),
         'tags: ["' + domain.name + '", "assets", "text-capture", "verbatim"]',
         '---',
         '',
@@ -346,38 +374,46 @@ function applyHashedCapture(item, file, batchDirectory, dryRun, silent, manifest
     }
     const archivePath = allocateArchivePath(item.domain, file.relativePath, batchDirectory);
     const assetPath = writeAsset(item.domain, file, archivePath, dryRun, sourceSha256);
-    archiveFile(file.path, archivePath, dryRun);
     const row = manifest.get(file.path);
     row.archivePath = archivePath;
     row.sourceSha256 = sourceSha256;
     row.artifacts.push(assetPath);
+    row.generatedArtifacts.push(assetPath);
+    archiveFile(file.path, archivePath, dryRun);
 }
 
 function allocateVisionOutputs(domain, label) {
     const base = slugify(label) || 'visual-batch';
     let slug = base;
-    let manifest = join(domain.path, 'assets', 'asset-' + slug + '-photographic-telemetry.md');
-    let telemetry = join(domain.path, 'inbox', 'archive', slug + '-vision-telemetry.json');
+    let manifest = join(domain.path, 'assets', 'image-telemetry-' + slug + '.md');
+    let telemetry = join(domain.path, 'assets', 'image-telemetry-' + slug + '.vision.jsonl');
     for (let counter = 2; existsSync(manifest) || existsSync(telemetry); counter++) {
         slug = base + '-' + counter;
-        manifest = join(domain.path, 'assets', 'asset-' + slug + '-photographic-telemetry.md');
-        telemetry = join(domain.path, 'inbox', 'archive', slug + '-vision-telemetry.json');
+        manifest = join(domain.path, 'assets', 'image-telemetry-' + slug + '.md');
+        telemetry = join(domain.path, 'assets', 'image-telemetry-' + slug + '.vision.jsonl');
     }
     return { slug, manifest, telemetry };
 }
 
-function processVision(item, images, dryRun, { silent = false } = {}) {
+function processVision(item, images, batchDirectory, dryRun, { silent = false } = {}) {
     const outputs = allocateVisionOutputs(item.domain, item.label);
+    const custody = images.map(file => ({
+        sourcePath: file.path,
+        originalPath: posixRel(file.path),
+        archivePath: allocateArchivePath(item.domain, file.relativePath, batchDirectory),
+        sourceSha256: sha256File(file.path)
+    }));
+    outputs.custodyBySource = new Map(custody.map(item => [item.sourcePath, item]));
     if (dryRun) {
         if (!silent) console.log(`  ${ui.warning('DRY')} Vision/OCR → ${ui.muted(relative(REPO_ROOT, outputs.manifest))}`);
-        return outputs.manifest;
+        return outputs;
     }
     const target = item.kind === 'batch' ? item.inboxPath : images[0].path;
-    const assetId = item.domain.prefix + ':asset-' + outputs.slug + '-photographic-telemetry';
+    const assetId = item.domain.prefix + ':image-telemetry-' + outputs.slug;
 
-    executeVision(target, item.domain.name, outputs.manifest, outputs.telemetry, assetId, REPO_ROOT, silent);
+    executeVision(target, item.domain.name, outputs.manifest, outputs.telemetry, assetId, REPO_ROOT, silent, custody);
 
-    return outputs.manifest;
+    return outputs;
 }
 
 function withSilencedConsole(fn) {
@@ -393,36 +429,63 @@ function withSilencedConsole(fn) {
     }
 }
 
-function processItem(item, dryRun, { silent = false, frontier = false } = {}) {
+function processItem(item, dryRun, { silent = false, frontier = false, request = null } = {}) {
+    const { sensors } = discoverPlugins(REPO_ROOT);
+    const files = item.files.map(file => {
+        if (frontier) return file;
+        if (file.type !== 'unsupported') return file;
+        const sensorMatch = selectSensor(file.path, sensors);
+        if (!sensorMatch) {
+            throw new Error(`No built-in or plugin sensor recognizes ${file.relativePath}. The capture remains in inbox. An agent may inspect a bounded sample and add a sensor under .sos/plugins/.`);
+        }
+        return { ...file, type: 'plugin', sensorMatch };
+    });
     const batchDirectory = item.kind === 'batch' ? allocateBatchArchiveDirectory(item.domain, item.label) : null;
-    const manifest = new Map(item.files.map(file => [file.path, { originalPath: posixRel(file.path), archivePath: null, artifacts: [] }]));
+    const manifest = new Map(files.map(file => [file.path, {
+        originalPath: posixRel(file.path),
+        relativePath: file.relativePath,
+        fileType: file.type,
+        bytes: statSync(file.path).size,
+        sourcePath: file.path,
+        archivePath: null,
+        artifacts: [],
+        artifactDetails: [],
+        primaryRecordPath: null,
+        generatedArtifacts: [],
+        warnings: [],
+        tags: []
+    }]));
     const failures = [];
     const attempt = (file, operation) => {
         try {
             operation();
         } catch (error) {
-            manifest.delete(file.path);
             failures.push(file.relativePath + ': ' + error.stack);
         }
     };
-    const media = item.files.filter(file => file.type === 'media');
-    const text = item.files.filter(file => file.type === 'text');
-    const images = item.files.filter(file => file.type === 'image');
-    const documents = item.files.filter(file => file.type === 'document');
-    const spreadsheets = item.files.filter(file => file.type === 'spreadsheet');
+    const media = files.filter(file => file.type === 'media');
+    const text = files.filter(file => file.type === 'text');
+    const images = files.filter(file => file.type === 'image');
+    const documents = files.filter(file => file.type === 'document');
+    const spreadsheets = files.filter(file => file.type === 'spreadsheet');
+    const pluginFiles = files.filter(file => file.type === 'plugin');
 
     if (frontier) {
-        for (const file of item.files) {
+        for (const file of files) {
             attempt(file, () => {
-                const sourceSha256 = sha256File(file.path);
-                const archivePath = allocateArchivePath(item.domain, file.relativePath, batchDirectory);
-                archiveFile(file.path, archivePath, dryRun);
                 const row = manifest.get(file.path);
-                row.archivePath = archivePath;
-                row.sourceSha256 = sourceSha256;
+                row.sourceSha256 = sha256File(file.path);
+                row.archivePath = allocateArchivePath(item.domain, file.relativePath, batchDirectory);
+                row.sensorId = 'frontier:handoff';
+                row.sensorVersion = BUILTIN_SENSOR_VERSION;
+                row.frontierRequest = request;
+                row.tags.push('frontier', 'frontier-handoff');
+                row.localAdvice = localBaselineAdvice(file, sensors);
+                archiveFile(file.path, row.archivePath, dryRun);
             });
         }
     } else {
+
         for (const file of media) {
             attempt(file, () => {
                 const archiveRelativePath = item.kind === 'batch' ? join(basename(batchDirectory), file.relativePath) : file.relativePath;
@@ -430,71 +493,177 @@ function processItem(item, dryRun, { silent = false, frontier = false } = {}) {
                 const row = manifest.get(file.path);
                 row.archivePath = result.archivePath;
                 row.sourceSha256 = result.sourceSha256 || null;
+                row.sensorId = 'builtin:media';
+                row.primaryRecordPath = result.transcriptPath;
+                row.recordCount = result.recordCount || 0;
+                row.tags.push('machine-transcript', 'speech');
                 row.artifacts.push(result.transcriptPath);
-                if (result.keyframePath) row.artifacts.push(result.keyframePath);
+                row.artifactDetails.push({ path: result.transcriptPath, role: 'machine-transcript', mediaType: 'text/markdown' });
+                if (result.segmentIndexPath) row.artifacts.push(result.segmentIndexPath);
+                if (result.segmentIndexPath) row.artifactDetails.push({ path: result.segmentIndexPath, role: 'segment-index', mediaType: 'application/x-ndjson' });
+                row.sensorVersion = BUILTIN_SENSOR_VERSION;
+                if (!result.deduplicated) {
+                    row.generatedArtifacts.push(result.transcriptPath);
+                    if (result.segmentIndexPath) row.generatedArtifacts.push(result.segmentIndexPath);
+                }
             });
         }
         for (const file of text) {
             attempt(file, () => {
+                const sourceSha256 = sha256File(file.path);
                 const archivePath = allocateArchivePath(item.domain, file.relativePath, batchDirectory);
-                const assetPath = writeTextAsset(item.domain, file, archivePath, dryRun);
-                archiveFile(file.path, archivePath, dryRun);
+                const assetPath = writeTextAsset(item.domain, file, archivePath, dryRun, sourceSha256);
                 const row = manifest.get(file.path);
                 row.archivePath = archivePath;
+                row.sourceSha256 = sourceSha256;
+                row.sensorId = 'builtin:text';
+                row.primaryRecordPath = assetPath;
                 row.artifacts.push(assetPath);
+                row.generatedArtifacts.push(assetPath);
+                row.artifactDetails.push({ path: assetPath, role: 'verbatim-text', mediaType: 'text/markdown' });
+                row.sensorVersion = BUILTIN_SENSOR_VERSION;
+                archiveFile(file.path, archivePath, dryRun);
             });
         }
         if (images.length) {
-            let assetPath = null;
+            let visionOutputs = null;
             try {
-                assetPath = processVision(item, images, dryRun, { silent });
+                visionOutputs = processVision(item, images, batchDirectory, dryRun, { silent });
             } catch (error) {
                 for (const file of images) {
                     manifest.delete(file.path);
                     failures.push(file.relativePath + ': visual extraction failed — ' + error.stack);
                 }
             }
-            if (assetPath) {
+            if (visionOutputs) {
                 for (const file of images) {
                     attempt(file, () => {
-                        const archivePath = allocateArchivePath(item.domain, file.relativePath, batchDirectory);
-                        archiveFile(file.path, archivePath, dryRun);
+                        const custody = visionOutputs.custodyBySource.get(file.path);
+                        const sourceSha256 = custody.sourceSha256;
+                        const archivePath = custody.archivePath;
                         const row = manifest.get(file.path);
                         row.archivePath = archivePath;
-                        row.artifacts.push(assetPath);
+                        row.sourceSha256 = sourceSha256;
+                        row.sensorId = 'builtin:vision';
+                        row.primaryRecordPath = visionOutputs.manifest;
+                        row.artifacts.push(visionOutputs.manifest);
+                        row.artifacts.push(visionOutputs.telemetry);
+                        row.generatedArtifacts.push(visionOutputs.manifest);
+                        row.generatedArtifacts.push(visionOutputs.telemetry);
+                        row.artifactDetails.push({ path: visionOutputs.manifest, role: 'visual-telemetry', mediaType: 'text/markdown' });
+                        row.artifactDetails.push({ path: visionOutputs.telemetry, role: 'vision-index', mediaType: 'application/x-ndjson' });
+                        row.sensorVersion = BUILTIN_SENSOR_VERSION;
+                        archiveFile(file.path, archivePath, dryRun);
                     });
                 }
             }
         }
         for (const file of documents) {
-            attempt(file, () => applyHashedCapture(item, file, batchDirectory, dryRun, silent, manifest, {
-                type: 'pdf-capture',
-                skipLabel: 'PDFKit',
-                prefix: 'pdf',
-                writeAsset: writePdfAsset
-            }));
+            attempt(file, () => {
+                applyHashedCapture(item, file, batchDirectory, dryRun, silent, manifest, {
+                    type: 'pdf-capture',
+                    skipLabel: 'PDFKit',
+                    prefix: 'pdf',
+                    writeAsset: writePdfAsset
+                });
+                const row = manifest.get(file.path);
+                row.sensorId = 'builtin:pdf';
+                row.primaryRecordPath = row.artifacts.find(path => extname(path).toLowerCase() === '.md') || null;
+                row.sensorVersion = BUILTIN_SENSOR_VERSION;
+                row.artifactDetails = row.artifacts.map(path => ({ path, role: 'verbatim-pdf-text', mediaType: 'text/markdown' }));
+            });
         }
         for (const file of spreadsheets) {
-            attempt(file, () => applyHashedCapture(item, file, batchDirectory, dryRun, silent, manifest, {
-                type: 'spreadsheet-capture',
-                skipLabel: 'spreadsheet extract',
-                prefix: 'spreadsheet',
-                writeAsset: writeSpreadsheetAsset
-            }));
+            attempt(file, () => {
+                applyHashedCapture(item, file, batchDirectory, dryRun, silent, manifest, {
+                    type: 'spreadsheet-capture',
+                    skipLabel: 'spreadsheet extract',
+                    prefix: 'spreadsheet',
+                    writeAsset: writeSpreadsheetAsset
+                });
+                const row = manifest.get(file.path);
+                row.sensorId = 'builtin:spreadsheet';
+                row.primaryRecordPath = row.artifacts.find(path => extname(path).toLowerCase() === '.md') || null;
+                row.sensorVersion = BUILTIN_SENSOR_VERSION;
+                row.artifactDetails = row.artifacts.map(path => ({ path, role: 'full-grid', mediaType: 'text/markdown' }));
+            });
+        }
+        for (const file of pluginFiles) {
+            attempt(file, () => {
+                const sourceSha256 = sha256File(file.path);
+                const archivePath = allocateArchivePath(item.domain, file.relativePath, batchDirectory);
+                const extraction = extractWithSensor(file.sensorMatch, {
+                    sourcePath: file.path,
+                    outputDir: join(item.domain.path, 'assets'),
+                    stem: slugify(item.label) || 'capture',
+                    domain: item.domain,
+                    sourceSha256,
+                    dryRun
+                });
+                const row = manifest.get(file.path);
+                row.generatedArtifacts.push(...extraction.artifacts);
+                if (!dryRun && sha256File(file.path) !== sourceSha256) {
+                    throw new Error(`${extraction.sensorId} changed the source capture during extraction; refusing to archive it.`);
+                }
+                row.archivePath = archivePath;
+                row.sourceSha256 = sourceSha256;
+                row.sensorId = extraction.sensorId;
+                row.sensorVersion = extraction.sensorVersion;
+                row.recordCount = extraction.recordCount;
+                row.warnings = extraction.warnings;
+                row.tags = extraction.tags;
+                row.summaryMarkdown = extraction.summaryMarkdown;
+                row.recordProfile = extraction.recordProfile;
+                row.primaryRecordPath = extraction.primaryRecordPath;
+                row.artifacts.push(...extraction.artifacts);
+                row.artifactDetails.push(...extraction.artifactDetails);
+                archiveFile(file.path, archivePath, dryRun);
+            });
         }
     }
 
-    const completed = [...manifest.values()];
+    const rows = [...manifest.values()];
+    if (failures.length) rollbackFailedBatch(item, rows, batchDirectory, dryRun);
+    const completed = failures.length
+        ? []
+        : rows.filter(row => row.archivePath && (row.artifacts.length || frontier));
     try {
         let debrief = null;
-        if (completed.length) {
+        let t2Record = null;
+        let aggregateArtifacts = [];
+        if (completed.length && failures.length === 0) {
+            const existingPrimary = !frontier && item.kind === 'single' ? completed[0].primaryRecordPath : null;
+            if (existingPrimary) {
+                t2Record = existingPrimary;
+            } else {
+                const aggregate = writeT2Record({
+                    domain: item.domain,
+                    label: item.label,
+                    scope: item.kind === 'batch' ? 'batch' : 'single',
+                    rows: completed.map((row, index) => frontier && index === 0
+                        ? {
+                            ...row,
+                            recordProfile: {
+                                prefix: 'frontier-intake',
+                                titlePrefix: 'Frontier Intake',
+                                type: 'frontier-intake',
+                                description: 'Deterministic frontier escalation handoff with archived sources and an explicit operator request.'
+                            },
+                            summaryMarkdown: frontierSummary({ request, rows: completed })
+                        }
+                        : row),
+                    dryRun
+                });
+                t2Record = aggregate.path;
+                aggregateArtifacts = aggregate.artifacts;
+            }
             const record = writeDebriefRecord({
                 domain: item.domain,
                 label: item.label,
                 scope: item.kind === 'batch' ? 'batch' : 'single',
-                manifest: completed,
-                dryRun,
-                frontier
+                rows: completed,
+                t2RecordPath: t2Record,
+                dryRun
             });
             debrief = posixRel(record.filePath);
             if (!silent) {
@@ -503,7 +672,16 @@ function processItem(item, dryRun, { silent = false, frontier = false } = {}) {
                 console.log(`  ${color(label)} -> ${ui.muted(debrief)}`);
             }
         }
-        return { debrief, failures, ...closedUnitFields(item, completed, batchDirectory) };
+        const retainedBatchDirectory = failures.length ? null : batchDirectory;
+        return {
+            debrief,
+            t2Record: posixRel(t2Record),
+            failures,
+            plan: frontier && dryRun && !failures.length
+                ? frontierPlan(item, completed, t2Record, aggregateArtifacts)
+                : null,
+            ...closedUnitFields(item, completed, retainedBatchDirectory, t2Record, aggregateArtifacts)
+        };
     } finally {
         removeEmptyBatchSource(item, dryRun);
     }
@@ -513,7 +691,7 @@ function posixRel(absPath) {
     return absPath ? relative(REPO_ROOT, absPath).split(sep).join('/') : null;
 }
 
-function closedUnitFields(item, completed, batchDirectory) {
+function closedUnitFields(item, completed, batchDirectory, t2Record = null, aggregateArtifacts = []) {
     const hashes = [...new Set((completed || []).map(row => row.sourceSha256).filter(Boolean))];
     const assetSet = new Set();
     for (const row of completed || []) {
@@ -522,7 +700,12 @@ function closedUnitFields(item, completed, batchDirectory) {
             if (relPath && relPath.split('/').includes('assets')) assetSet.add(relPath);
         }
     }
-    const assets = [...assetSet];
+    const primaryPath = posixRel(t2Record);
+    const assets = [...assetSet].filter(path => path !== primaryPath);
+    if (primaryPath) assets.unshift(primaryPath);
+    for (const artifact of aggregateArtifacts.map(posixRel).filter(Boolean)) {
+        if (!assets.includes(artifact)) assets.push(artifact);
+    }
     let archive = null;
     if (item.kind === 'batch') {
         archive = batchDirectory ? posixRel(batchDirectory) : null;
@@ -533,6 +716,47 @@ function closedUnitFields(item, completed, batchDirectory) {
         sourceSha256: hashes.length === 1 ? hashes[0] : null,
         archive,
         assets: assets.length ? assets : null
+    };
+}
+
+function frontierPlan(item, rows, t2Record, aggregateArtifacts) {
+    const byType = {};
+    const baselines = new Map();
+    const unknown = [];
+    let bytes = 0;
+    for (const row of rows) {
+        const type = row.fileType || 'unsupported';
+        byType[type] = (byType[type] || 0) + 1;
+        bytes += Number(row.bytes) || 0;
+        const advice = row.localAdvice || { available: false, route: null, description: 'No local baseline was identified.' };
+        const key = [advice.available, advice.route, advice.description].join('|');
+        const baseline = baselines.get(key) || {
+            available: advice.available,
+            route: advice.route,
+            description: advice.description,
+            captures: 0,
+            bytes: 0
+        };
+        baseline.captures++;
+        baseline.bytes += Number(row.bytes) || 0;
+        baselines.set(key, baseline);
+        if (!advice.available) unknown.push(row.relativePath || row.originalPath);
+    }
+    const inventory = aggregateArtifacts
+        .map(posixRel)
+        .find(path => path?.endsWith('.jsonl')) || null;
+    return {
+        mode: 'frontier',
+        scope: item.kind,
+        captures: rows.length,
+        bytes,
+        byType,
+        localBaselines: [...baselines.values()],
+        unknown,
+        plannedOutputs: {
+            intake: posixRel(t2Record),
+            inventory
+        }
     };
 }
 
@@ -551,8 +775,8 @@ function emitIngestError(message, json) {
     process.exitCode = 1;
 }
 
-function runItem(item, dryRun, json, frontier) {
-    const execute = () => processItem(item, dryRun, { silent: json, frontier });
+function runItem(item, dryRun, json, frontier, request) {
+    const execute = () => processItem(item, dryRun, { silent: json, frontier, request });
     return json ? withSilencedConsole(execute) : execute();
 }
 
@@ -565,7 +789,7 @@ async function main() {
         return;
     }
 
-    if (!options.json) printBanner('SENSOR INGESTION PIPELINE', 'Local sensor extraction • Deterministic debrief records');
+    if (!options.json) printBanner(options.frontier ? 'FRONTIER ESCALATION INTAKE' : 'SENSOR INGESTION PIPELINE', options.frontier ? 'Explicit model handoff • Deterministic custody record' : 'Local sensor extraction • Deterministic debrief records');
     let scan;
     let work;
     try {
@@ -604,7 +828,7 @@ async function main() {
     for (const item of work) {
         if (!options.json) console.log(`\n${ui.command(item.kind === 'batch' ? 'Batch' : 'Capture')}: ${ui.muted(relative(REPO_ROOT, item.inboxPath))} ${ui.muted(`(${item.files.length})`)}`);
         try {
-            const result = runItem(item, options.dryRun, options.json, options.frontier);
+            const result = runItem(item, options.dryRun, options.json, options.frontier, options.request);
             const error = result.failures.length ? result.failures.join('\n  ') : null;
             if (error) {
                 failures++;
@@ -615,7 +839,11 @@ async function main() {
                 path: posixRel(item.inboxPath),
                 domain: item.domain.name,
                 files: item.files.length,
+                frontier: options.frontier,
+                request: options.frontier ? options.request : null,
+                plan: result.plan ?? null,
                 debrief: result.debrief,
+                t2Record: result.t2Record,
                 error,
                 sourceSha256: result.sourceSha256 ?? null,
                 archive: result.archive ?? null,
@@ -629,7 +857,9 @@ async function main() {
                 path: posixRel(item.inboxPath),
                 domain: item.domain.name,
                 files: item.files.length,
+                plan: null,
                 debrief: null,
+                t2Record: null,
                 error: error.stack,
                 sourceSha256: null,
                 archive: null,

@@ -1,7 +1,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 
-import { namespacePrefix, parseFrontmatter } from './frontmatter.mjs';
+import { parseFrontmatter } from './frontmatter.mjs';
+import { canonicalDomainNamespace } from './identity.mjs';
 import { resolveRepoRoot } from './root.mjs';
 
 // SOS_ROOT remains the override. Walk from cwd when it exists; if cwd was
@@ -21,7 +22,7 @@ function toTitleCase(str) {
  * {
  *   name: "personal",
  *   path: "<repo-root>/personal",
- *   prefix: "psn",
+ *   prefix: "personal",
  *   exposure: "private",
  *   tier: 1, // 1: private, 2: restricted, 3: public
  *   spaceFile: "<repo-root>/personal/SPACE.md",
@@ -40,12 +41,11 @@ export function discoverDomains(rootDir = REPO_ROOT) {
                 const spaceFile = join(itemPath, 'SPACE.md');
                 if (existsSync(spaceFile)) {
                     const parsed = parseFrontmatter(readFileSync(spaceFile, 'utf-8'));
-                    let prefix = item.slice(0, 4);
+                    const prefix = canonicalDomainNamespace(item);
                     let exposure = 'standard';
                     let tier = 3;
                     let title = toTitleCase(item);
 
-                    if (parsed?.id) prefix = namespacePrefix(parsed.id, prefix);
                     if (parsed?.exposure) {
                         exposure = parsed.exposure.toLowerCase();
                         if (exposure === 'private') tier = 1;

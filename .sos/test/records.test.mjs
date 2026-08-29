@@ -56,13 +56,16 @@ test('parseRecord sets physical tier from folder location', () => {
 test('parseRecord evidence lists asset then archive pointers from fixture links', () => {
     const root = mkdtempSync(join(os.tmpdir(), 'sos-records-evidence-'));
     mkdirSync(join(root, 'personal', 'inbox', 'archive'), { recursive: true });
+    mkdirSync(join(root, 'personal', 'assets'), { recursive: true });
     writeFileSync(join(root, 'personal', 'inbox', 'archive', 'complete.m4a'), 'audio');
     writeFileSync(join(root, 'personal', 'inbox', 'archive', 'complete.json'), '{}');
+    writeFileSync(join(root, 'personal', 'assets', 'complete.events.jsonl'), '{}\n');
     writeNote(root, 'personal/assets/transcript-complete.md', {
         id: 'psn:transcript-complete',
         body: [
             '**Source Media:** [complete.m4a](../inbox/archive/complete.m4a)',
-            '**Raw JSON:** [complete.json](../inbox/archive/complete.json)'
+            '**Raw JSON:** [complete.json](../inbox/archive/complete.json)',
+            '**Event index:** [complete.events.jsonl](complete.events.jsonl)'
         ].join('\n')
     });
     const notePath = writeNote(root, 'personal/research.md', {
@@ -77,6 +80,7 @@ test('parseRecord evidence lists asset then archive pointers from fixture links'
     assert.equal(record.tier, 1);
     assert.deepEqual(record.evidence, [{
         asset: 'personal/assets/transcript-complete.md',
+        artifacts: ['personal/assets/complete.events.jsonl'],
         archives: [
             'personal/inbox/archive/complete.m4a',
             'personal/inbox/archive/complete.json'

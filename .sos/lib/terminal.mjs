@@ -36,7 +36,7 @@ export function colorizeHelp(text) {
     const sectionHeadings = new Set(['Sovereign OS', 'Commands', 'Details', 'Selection', 'Options', 'Filters — choose one', 'Requirements', 'Typical flow:']);
     return text.split('\n').map(line => {
         if (sectionHeadings.has(line.trim())) return ui.heading(line);
-        let styled = line.replace(/(^\s*(?:\d+\.\s+)?)(sos(?:\s+(?:init|inbox|ingest|fetch|graph|audit|check|sync|upgrade|doctor|help|status|config))?|debrief|review charter <domain>|brief me on <topic>|weave <node-id>)(?=\s|$)/, (_match, indent, command) => `${indent}${ui.command(command)}`);
+        let styled = line.replace(/(^\s*(?:\d+\.\s+)?)(sos(?:\s+(?:init|inbox|ingest|fetch|graph|trace|audit|check|sync|upgrade|doctor|help|status|config))?|debrief|review charter <domain>|brief me on <topic>|weave <node-id>)(?=\s|$)/, (_match, indent, command) => `${indent}${ui.command(command)}`);
         styled = styled.replace(/(--[a-z][a-z-]*(?:\s+<[^>]+>)?)/g, match => ui.option(match));
         if (/^\s{2,}"This shows/.test(line)) styled = ui.muted(styled);
         return styled;

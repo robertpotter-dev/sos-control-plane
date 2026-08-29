@@ -156,7 +156,10 @@ test('ingest archives a csv original and writes a full spreadsheet capture', () 
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
     assert.equal(payload.units[0].archive, 'journal/inbox/archive/tickets.csv');
-    assert.deepEqual(payload.units[0].assets, ['journal/assets/spreadsheet-tickets.md']);
+    assert.deepEqual(payload.units[0].assets, [
+        'journal/assets/spreadsheet-tickets.md'
+    ]);
+    assert.equal(payload.units[0].t2Record, 'journal/assets/spreadsheet-tickets.md');
     assert.equal(payload.units[0].debrief, 'journal/inbox/debrief-tickets.md');
     const capture = readFileSync(join(root, 'journal', 'assets', 'spreadsheet-tickets.md'), 'utf-8');
     assert.match(capture, /type: "spreadsheet-capture"/);

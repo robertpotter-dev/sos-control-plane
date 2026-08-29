@@ -1,10 +1,17 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
-import { join } from 'path';
+import { isAbsolute, join, relative, resolve } from 'path';
 
 export const PLUGINS_DIR = '.sos/plugins';
 
 export function pluginsRoot(repoRoot) {
     return join(repoRoot, PLUGINS_DIR);
+}
+
+function validatePluginScript(pluginDir, script, label) {
+    const candidate = resolve(pluginDir, script);
+    const rel = relative(pluginDir, candidate);
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new Error(`${label} script must stay inside its plugin directory: ${script}`);
+    if (!existsSync(candidate) || !statSync(candidate).isFile()) throw new Error(`${label} script does not exist: ${script}`);
 }
 
 function validateManifest(manifest, folderName) {
@@ -14,10 +21,18 @@ function validateManifest(manifest, folderName) {
     if (typeof manifest.id !== 'string' || !manifest.id.trim()) {
         throw new Error(`Plugin manifest in ${folderName} requires a non-empty "id".`);
     }
-    if (!manifest.commands || typeof manifest.commands !== 'object' || Array.isArray(manifest.commands)) {
-        throw new Error(`Plugin manifest in ${folderName} requires a "commands" object.`);
+    const commands = manifest.commands ?? {};
+    const sensors = manifest.sensors ?? {};
+    if (typeof commands !== 'object' || Array.isArray(commands)) {
+        throw new Error(`Plugin manifest in ${folderName} "commands" must be an object.`);
     }
-    for (const [commandName, definition] of Object.entries(manifest.commands)) {
+    if (typeof sensors !== 'object' || Array.isArray(sensors)) {
+        throw new Error(`Plugin manifest in ${folderName} "sensors" must be an object.`);
+    }
+    if (!Object.keys(commands).length && !Object.keys(sensors).length) {
+        throw new Error(`Plugin manifest in ${folderName} requires at least one command or sensor.`);
+    }
+    for (const [commandName, definition] of Object.entries(commands)) {
         if (!commandName.trim()) throw new Error(`Plugin ${manifest.id} declares an empty command name.`);
         if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
             throw new Error(`Plugin ${manifest.id} command "${commandName}" must be an object.`);
@@ -29,13 +44,33 @@ function validateManifest(manifest, folderName) {
             throw new Error(`Plugin ${manifest.id} command "${commandName}" requires "help".`);
         }
     }
+    for (const [sensorId, definition] of Object.entries(sensors)) {
+        if (!sensorId.trim()) throw new Error(`Plugin ${manifest.id} declares an empty sensor ID.`);
+        if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
+            throw new Error(`Plugin ${manifest.id} sensor "${sensorId}" must be an object.`);
+        }
+        if (typeof definition.script !== 'string' || !definition.script.trim()) {
+            throw new Error(`Plugin ${manifest.id} sensor "${sensorId}" requires "script".`);
+        }
+        if (typeof definition.description !== 'string' || !definition.description.trim()) {
+            throw new Error(`Plugin ${manifest.id} sensor "${sensorId}" requires "description".`);
+        }
+        if (!Array.isArray(definition.extensions) || !definition.extensions.length || definition.extensions.some(value => typeof value !== 'string' || !value.startsWith('.'))) {
+            throw new Error(`Plugin ${manifest.id} sensor "${sensorId}" requires an "extensions" array of dotted file extensions.`);
+        }
+        if (definition.tags != null && (!Array.isArray(definition.tags) || definition.tags.some(value => typeof value !== 'string' || !value.trim()))) {
+            throw new Error(`Plugin ${manifest.id} sensor "${sensorId}" tags must be non-empty strings.`);
+        }
+    }
 }
 
 export function discoverPlugins(repoRoot) {
     const root = pluginsRoot(repoRoot);
     const plugins = [];
     const commands = new Map();
-    if (!existsSync(root)) return { plugins, commands };
+    const sensors = [];
+    const pluginIds = new Set();
+    if (!existsSync(root)) return { plugins, commands, sensors };
 
     for (const folderName of readdirSync(root).sort()) {
         if (folderName.startsWith('.')) continue;
@@ -51,8 +86,13 @@ export function discoverPlugins(repoRoot) {
             throw new Error(`Invalid plugin manifest: ${manifestPath}`);
         }
         validateManifest(manifest, folderName);
+        if (pluginIds.has(manifest.id)) {
+            throw new Error(`Duplicate plugin id "${manifest.id}" in ${folderName}.`);
+        }
+        pluginIds.add(manifest.id);
 
-        for (const [commandName, definition] of Object.entries(manifest.commands)) {
+        for (const [commandName, definition] of Object.entries(manifest.commands || {})) {
+            validatePluginScript(pluginDir, definition.script, `Plugin ${manifest.id} command "${commandName}"`);
             if (commands.has(commandName)) {
                 throw new Error(`Duplicate plugin command "${commandName}" declared by ${manifest.id}.`);
             }
@@ -66,10 +106,24 @@ export function discoverPlugins(repoRoot) {
                 nativeJson: definition.nativeJson !== false
             });
         }
+        for (const [sensorId, definition] of Object.entries(manifest.sensors || {})) {
+            validatePluginScript(pluginDir, definition.script, `Plugin ${manifest.id} sensor "${sensorId}"`);
+            sensors.push({
+                sensorId,
+                pluginId: manifest.id,
+                pluginVersion: String(manifest.version || '0.0.0'),
+                pluginDir,
+                script: definition.script,
+                description: definition.description,
+                extensions: [...new Set(definition.extensions.map(value => value.toLowerCase()))],
+                tags: [...new Set(definition.tags || [])],
+                priority: Number(definition.priority) || 0
+            });
+        }
         plugins.push({ id: manifest.id, folderName, pluginDir, manifest });
     }
 
-    return { plugins, commands };
+    return { plugins, commands, sensors };
 }
 
 export function pluginOverviewLines(commands) {

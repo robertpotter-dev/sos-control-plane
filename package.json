@@ -1,6 +1,6 @@
 {
   "name": "sovereign-os",
-  "version": "1.5.3",
+  "version": "1.6.0",
   "description": "Local-first intellectual operating system and knowledge graph",
   "type": "module",
   "bin": {
@@ -18,7 +18,7 @@
     "check": "node .sos/lib/pipeline.mjs",
     "transcribe": "node .sos/lib/transcribe.mjs",
     "fetch": "node .sos/lib/fetch.mjs",
-    "vision": "swift .sos/lib/vision.swift",
+    "vision": "swift .sos/plugins/apple-metal/vision.swift",
     "test": "node --test .sos/test/*.test.mjs"
   },
   "keywords": [

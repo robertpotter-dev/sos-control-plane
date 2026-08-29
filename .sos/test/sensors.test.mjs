@@ -4,13 +4,14 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
 
-import { executeVision, extractPdfText } from '../lib/sensors.mjs';
+import { executeVision, extractPdfText, normalizeVisionIndex } from '../lib/sensors.mjs';
 import { decodeForVision, readImageSize } from '../lib/image-decode.mjs';
 import { readJpegExif } from '../lib/jpeg-exif.mjs';
 import { formatPdfPages } from '../lib/portable-pdf.mjs';
 import { describeVisionEngine, runPortableVision } from '../lib/portable-vision.mjs';
 import { mirrorTree } from '../lib/mirror-tree.mjs';
 import { findExtractedControlPlane } from '../lib/archive-fetch.mjs';
+import { readJsonRecords } from '../lib/jsonl.mjs';
 
 const PNG_1X1 = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
@@ -68,7 +69,7 @@ test('portable vision succeeds when OCR is empty and does not claim Apple Vision
     const imagePath = join(dir, 'dot.png');
     writeFileSync(imagePath, PNG_1X1);
     const manifestPath = join(dir, 'assets', 'vision-dot.md');
-    const telemetryPath = join(dir, 'inbox', 'archive', 'vision-dot.json');
+    const telemetryPath = join(dir, 'assets', 'vision-dot.vision.jsonl');
     const results = runPortableVision({
         targetPath: imagePath,
         domainName: 'personal',
@@ -84,9 +85,14 @@ test('portable vision succeeds when OCR is empty and does not claim Apple Vision
     const manifest = readFileSync(manifestPath, 'utf-8');
     assert.match(manifest, /not Apple Vision/);
     assert.match(manifest, /No OCR text was recognized/);
+    assert.match(manifest, /Machine Vision Index \(Tier 2\)/);
+    assert.doesNotMatch(manifest, /inbox\/archive/);
     assert.match(describeVisionEngine(), /not Apple Vision|no OCR engine/);
-    const telemetry = JSON.parse(readFileSync(telemetryPath, 'utf-8'));
+    const telemetry = readJsonRecords(telemetryPath);
     assert.equal(telemetry[0].width, 1);
+    assert.equal(telemetry[0].index_line, 1);
+    assert.match(telemetry[0].record_id, /^vision:[a-f0-9]{16}:000001$/);
+    assert.equal(readFileSync(telemetryPath, 'utf-8').trim().split('\n').length, 1);
 });
 
 test('undecoded HEIC still ingests instead of failing the photo', () => {
@@ -97,12 +103,27 @@ test('undecoded HEIC still ingests instead of failing the photo', () => {
         targetPath: imagePath,
         domainName: 'personal',
         manifestPath: join(dir, 'manifest.md'),
-        telemetryPath: join(dir, 'telemetry.json'),
+        telemetryPath: join(dir, 'phone.vision.jsonl'),
         assetId: 'pers:vision-phone',
         repoRoot: dir
     });
     assert.equal(results.length, 1);
     assert.equal(results[0].filename, 'phone.heic');
+});
+
+test('Apple-style array telemetry is normalized to line-addressable Vision JSONL', () => {
+    const dir = mkdtempSync(join(os.tmpdir(), 'sos-vision-normalize-'));
+    const indexPath = join(dir, 'batch.vision.jsonl');
+    writeFileSync(indexPath, `${JSON.stringify([{ filename: 'one.jpg' }, { filename: 'two.jpg' }], null, 2)}\n`);
+    const custody = [
+        { originalPath: 'personal/inbox/one.jpg', sourceSha256: 'a'.repeat(64) },
+        { originalPath: 'personal/inbox/two.jpg', sourceSha256: 'b'.repeat(64) }
+    ];
+    const records = normalizeVisionIndex(indexPath, custody);
+    assert.equal(records.length, 2);
+    assert.equal(records[1].record_id, 'vision:bbbbbbbbbbbbbbbb:000002');
+    assert.equal(records[1].source_path, 'personal/inbox/two.jpg');
+    assert.equal(readFileSync(indexPath, 'utf-8').trim().split('\n').length, 2);
 });
 
 test('formatPdfPages splits form-feed pages like PDFKit output', () => {

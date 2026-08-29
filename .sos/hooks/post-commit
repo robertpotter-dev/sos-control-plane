@@ -1,2 +1,5 @@
 #!/bin/sh
-node .sos/lib/sync.mjs" --quick
+set -e
+cd "$(git rev-parse --show-toplevel)"
+export SOS_ROOT="$PWD"
+node .sos/sos.mjs sync --quick --quiet

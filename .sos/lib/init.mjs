@@ -3,6 +3,7 @@ import { basename, join, relative } from 'path';
 
 import { fail } from './cli.mjs';
 import { localDateString } from './debrief.mjs';
+import { canonicalDomainNamespace } from './identity.mjs';
 import {
     configuredMirrors,
     configuredSystemName,
@@ -18,7 +19,7 @@ import { ui } from './terminal.mjs';
 export const INIT_CHARTER_PLACEHOLDER = 'This domain was created by sos init. Charter it in debrief before minting notes.';
 
 function mintDomain(repoRoot, domain) {
-    const prefix = domain.name.replace(/[^a-z0-9]/g, '').slice(0, 4) || 'node';
+    const prefix = canonicalDomainNamespace(domain.name);
     const domainPath = join(repoRoot, domain.name);
     const title = domain.name.replace(/\b\w/g, char => char.toUpperCase());
     mkdirSync(join(domainPath, 'assets'), { recursive: true });

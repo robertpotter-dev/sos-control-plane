@@ -1,0 +1,13 @@
+{
+  "id": "fixture-events",
+  "version": "0.0.0",
+  "sensors": {
+    "events": {
+      "script": "sensor.mjs",
+      "description": "Fixture structured-history HTML for kernel host tests.",
+      "extensions": [".html"],
+      "tags": ["structured-history", "event-index"],
+      "priority": 50
+    }
+  }
+}
